@@ -3,6 +3,11 @@ import type { Config, Plugin } from 'payload'
 import { buildProposalsCollection } from './collections/proposals.js'
 import { buildRunsCollection } from './collections/runs.js'
 import { buildSeoFields } from './fields/seoFields.js'
+import { generateProposalEndpoint } from './endpoints/generate.js'
+import { applyProposalEndpoint } from './endpoints/apply.js'
+import { auditEndpoint } from './endpoints/audit.js'
+import { generateProposalTask } from './jobs/generateProposal.js'
+import { runAuditTask } from './jobs/runAudit.js'
 
 import type { NimSeoPluginOptions, ValidatedPluginOptions } from './types.js'
 
@@ -93,6 +98,16 @@ export const validatePluginOptions = (
   if (bulk && !config.jobs) {
     throw configurationError('bulk requires Payload jobs configuration; configure jobs or disable bulk.')
   }
+  for (const endpoint of config.endpoints || []) {
+    if (endpoint.method === 'post' && ['/nim-seo/generate', '/nim-seo/apply', '/nim-seo/audit'].includes(endpoint.path)) {
+      throw configurationError(`${endpoint.path}: endpoint path is reserved by this plugin.`)
+    }
+  }
+  if (bulk) for (const task of config.jobs?.tasks ?? []) {
+    if (['nim-seo-generate-proposal', 'nim-seo-run-audit'].includes(task.slug)) {
+      throw configurationError(`${task.slug}: job task slug is reserved by this plugin.`)
+    }
+  }
 
   return { ...options, bulk }
 }
@@ -116,5 +131,10 @@ export const nimSeoPlugin = (options: NimSeoPluginOptions): Plugin => (config) =
   for (const build of [buildProposalsCollection, buildRunsCollection]) {
     collections.push(build(validated))
   }
-  return { ...config, collections }
+  const endpoints = [...(config.endpoints || []), generateProposalEndpoint(validated), applyProposalEndpoint(validated), auditEndpoint(validated)]
+  const jobs = validated.bulk ? {
+    ...config.jobs,
+    tasks: [...(config.jobs?.tasks ?? []), generateProposalTask(validated), runAuditTask(validated)],
+  } : config.jobs
+  return { ...config, collections, endpoints, ...(jobs ? { jobs } : {}) }
 }

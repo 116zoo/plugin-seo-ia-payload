@@ -18,6 +18,8 @@ export const buildRunsCollection = (options: ValidatedPluginOptions): Collection
     // Avoid colliding with Payload SQL's reserved translation-table suffix.
     { name: 'locales', type: 'select', dbName: 'selected_locales', options: options.locales, hasMany: true, required: true },
     { name: 'filter', type: 'json' },
+    { name: 'jobID', type: 'text', index: true },
+    { name: 'results', type: 'json' },
     { name: 'state', type: 'select', options: ['queued', 'running', 'completed', 'failed', 'cancelled'], defaultValue: 'queued', required: true, index: true },
     {
       name: 'progress', type: 'group', fields: [

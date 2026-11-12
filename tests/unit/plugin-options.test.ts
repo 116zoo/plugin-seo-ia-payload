@@ -183,7 +183,8 @@ describe('nimSeoPlugin', () => {
     const originalCollections = [...config.collections!]
     const originalFields = [...originalCollections[0].fields]
     const result = await nimSeoPlugin(makeOptions())(config)
-    expect(result.endpoints).toBe(config.endpoints)
+    expect(result.endpoints).toEqual(expect.arrayContaining(config.endpoints))
+    expect(config.endpoints).toHaveLength(1)
     expect(result.jobs).toBe(config.jobs)
     expect(result.admin).toBe(config.admin)
     expect(result.collections?.find(({ slug }) => slug === 'media')).toBe(originalCollections[1])
@@ -253,5 +254,29 @@ describe('nimSeoPlugin', () => {
     const result = await nimSeoPlugin(makeOptions())(config)
     expect(result.collections?.find(({ slug }) => slug === internal.slug)).toBe(internal)
     expect(result.collections?.find(({ slug }) => slug === 'media')).toBe(media)
+  })
+})
+
+describe('protected workflow registration', () => {
+  test('keeps host tasks/settings/endpoints intact while registering bulk tasks', async () => {
+    const config = makeConfig()
+    const task = { slug: 'host-job', handler: async () => ({ output: {} }) }
+    const queue = () => false
+    config.jobs = { tasks: [task], access: { queue } }
+    const result = await nimSeoPlugin({ ...makeOptions(), bulk: true })(config)
+    expect(result.jobs?.tasks).toEqual(expect.arrayContaining([task, expect.objectContaining({ slug: 'nim-seo-generate-proposal' }), expect.objectContaining({ slug: 'nim-seo-run-audit' })]))
+    expect(result.jobs?.access?.queue).toBe(queue)
+    expect(config.jobs.tasks).toEqual([task])
+    expect(result.endpoints).toEqual(expect.arrayContaining(['/nim-seo/generate', '/nim-seo/apply', '/nim-seo/audit'].map((path) => expect.objectContaining({ path, method: 'post' }))))
+  })
+  test.each(['nim-seo-generate-proposal', 'nim-seo-run-audit'])('rejects reserved host job collision %s', (slug) => {
+    const config = makeConfig()
+    config.jobs!.tasks = [{ slug, handler: async () => ({ output: {} }) }]
+    expect(() => nimSeoPlugin({ ...makeOptions(), bulk: true })(config)).toThrow(/reserved/)
+  })
+  test.each(['/nim-seo/generate', '/nim-seo/apply', '/nim-seo/audit'])('rejects reserved host endpoint collision %s', (path) => {
+    const config = makeConfig()
+    config.endpoints = [{ path, method: 'post', handler: () => new Response() }]
+    expect(() => nimSeoPlugin(makeOptions())(config)).toThrow(/reserved/)
   })
 })
