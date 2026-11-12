@@ -13,7 +13,7 @@ const pageTypes = new Set(['Article', 'BlogPosting', 'WebPage', 'FAQPage', 'Brea
 const sourceTypes = new Set(['Article', 'BlogPosting', 'WebPage', 'FAQPage', 'BreadcrumbList'])
 const withoutHash = (url: string): string => { const parsed = new URL(url); parsed.hash = ''; return parsed.href }
 // Explicit Schema.org vocabulary supported by this adapter; unknown/custom properties need a future adapter.
-const properties = new Set([
+export const editorialGraphProperties = [
   'name', 'headline', 'description', 'abstract', 'text', 'alternateName', 'inLanguage', 'datePublished', 'dateModified',
   'keywords', 'articleSection', 'wordCount', 'author', 'creator', 'editor', 'publisher', 'contributor', 'about', 'mentions',
   'mainEntity', 'mainEntityOfPage', 'isPartOf', 'hasPart', 'subjectOf', 'image', 'primaryImageOfPage', 'logo',
@@ -21,7 +21,8 @@ const properties = new Set([
   'sdLicense', 'discussionUrl', 'itemListElement', 'item', 'position', 'numberOfItems', 'acceptedAnswer', 'suggestedAnswer',
   'answerCount', 'question', 'address', 'streetAddress', 'addressLocality', 'addressRegion', 'postalCode', 'addressCountry',
   'contactPoint', 'contactType', 'email', 'telephone', 'areaServed', 'availableLanguage',
-])
+] as const
+const properties = new Set<string>(editorialGraphProperties)
 
 /** Local document dependencies, including values inside arrays, groups and polymorphic relations. */
 export const localDraftReferences = (value: unknown): Set<string> => {

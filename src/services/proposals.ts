@@ -210,7 +210,7 @@ export const createProposal = async (args: CreateProposalArgs): Promise<SeoPropo
   let errors: ProposalValidationDiagnostic[] | undefined
   try {
     const editorial = options.collections[input.collection].editorialFields
-      ? { registry: resolveEditorialRegistry(options, input.collection), registries: options.editorialRegistries, locale: input.locale }
+      ? { registry: resolveEditorialRegistry(options, input.collection), registries: options.editorialRegistries, locale: input.locale, mediaCollection: options.collections[input.collection].mediaCollection }
       : undefined
     const client = args.client ?? createNimClient(options.nim, editorial)
     // Keep the persistence boundary strict even with a trusted custom transport.

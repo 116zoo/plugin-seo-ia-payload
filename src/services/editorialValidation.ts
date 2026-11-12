@@ -7,6 +7,8 @@ export interface EditorialValidationContext {
   registry: EditorialRegistry
   registries: Record<string, EditorialRegistry>
   locale: string
+  /** Trusted candidate collection for the editor's selectedMedia; generation only. */
+  mediaCollection?: string
 }
 
 const fail = (message: string, path = 'editorial'): never => {

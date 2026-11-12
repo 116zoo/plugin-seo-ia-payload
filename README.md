@@ -255,6 +255,16 @@ editorial: {
 
 `semanticGraph` and `graphBindings` are an optional pair. Bindings assign every
 non-draft graph property to one validated patch, allowing safe partial selection.
+For collections with editorial fields, the default NIM client requests proposals
+for every supported configured field, with one locale-specific graph and its
+bindings. It sends only field types, constraints, option values and reachable
+creation policies, never raw Payload field configuration. Unsupported values
+remain omitted rather than fabricated. Existing upload choices come only from
+the editor's selected media collection; other existing relationship IDs require
+a future host-provided candidate catalog. Configured related drafts remain
+available for review when no existing candidate is supplied. The editorial
+completion budget is 8,192 tokens; truncated completions fail validation and are
+stored as failed proposals. SEO-only collections keep the original prompt.
 Related drafts have `{ collection, localId, locale, fields, graphNodeId }`; `fields`
 maps exact configured target paths to proposed values and `graphNodeId` is
 `draft:<localId>`. A relation value references it as `{ localId }` (or inside

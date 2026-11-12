@@ -1,6 +1,7 @@
 import type { NimConfig, SeoProposalPayload } from '../types.js'
 import type { EditorialValidationContext } from './editorialValidation.js'
 import type { GenerationInput } from './content.js'
+import { editorialGenerationPrompt, editorialGenerationSpecification } from './editorialGeneration.js'
 import { parseProposalOutput, ProposalValidationError, type ProposalValidationDiagnostic } from './validation.js'
 import { providerUsage, type NimUsage } from './usage.js'
 
@@ -71,6 +72,9 @@ export const createNimClient = (config: NimConfig, editorial?: EditorialValidati
   return {
     async generate(input) {
       if (typeof window !== 'undefined') throw new NimGenerationError('server_only')
+      if (editorial && (editorial.locale !== input.locale || editorial.registry.collection !== input.collection)) throw new NimGenerationError('invalid_configuration')
+      const specification = editorial && editorial.registry.fields.length ? editorialGenerationSpecification(editorial) : undefined
+      const prompt = specification ? `${systemPrompt.replace('Return exactly these four groups (no extra fields):', 'Return these four SEO groups and the editorial group described below (no other top-level fields):')}\n${editorialGenerationPrompt}` : systemPrompt
       let response: Response
       try {
         response = await fetch(endpoint, {
@@ -80,7 +84,8 @@ export const createNimClient = (config: NimConfig, editorial?: EditorialValidati
           signal: AbortSignal.timeout(60_000),
           body: JSON.stringify({
             model, stream: false, response_format: { type: 'json_object' },
-            messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: JSON.stringify(input) }],
+            ...(specification ? { max_tokens: 8192 } : {}),
+            messages: [{ role: 'system', content: prompt }, { role: 'user', content: JSON.stringify({ ...input, ...(specification ? { editorialSpecification: specification } : {}) }) }],
           }),
         })
       } catch {
@@ -103,7 +108,9 @@ export const createNimClient = (config: NimConfig, editorial?: EditorialValidati
       }
       if (typeof choice.message.content !== 'string' || !choice.message.content.trim()) throw new NimGenerationError('invalid_response', undefined, usage)
       try {
-        return { output: parseProposalOutput(choice.message.content, input, editorial), ...(usage ? { usage } : {}) }
+        const output = parseProposalOutput(choice.message.content, input, editorial)
+        if (specification && !output.editorial) throw new NimGenerationError('invalid_output', undefined, usage)
+        return { output, ...(usage ? { usage } : {}) }
       } catch (error) {
         throw error instanceof ProposalValidationError
           ? new NimGenerationError('invalid_output', error, usage)
