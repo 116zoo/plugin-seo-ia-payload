@@ -1,6 +1,6 @@
 'use client'
 
-import { useDocumentInfo, useForm, useFormModified } from '@payloadcms/ui'
+import { useDocumentInfo, useForm, useFormBackgroundProcessing, useFormModified, useFormProcessing } from '@payloadcms/ui'
 import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import type { SeoAudit } from '../services/audit.js'
 import type { SeoProposalPayload } from '../types.js'
@@ -20,6 +20,9 @@ export function SeoPanel({ locales, mediaCollection }: SeoPanelProps) {
   const { id, collectionSlug, data, setData } = useDocumentInfo()
   const form = useForm()
   const modified = useFormModified()
+  const processing = useFormProcessing()
+  const backgroundProcessing = useFormBackgroundProcessing()
+  const hostBusy = processing || backgroundProcessing
   const { locale, localeLabel, copy, api, permissions, supported } = useSeoContext(locales)
   const headingID = useId()
   const scope = `${api}:${collectionSlug}:${id}:${locale}`
@@ -27,13 +30,15 @@ export function SeoPanel({ locales, mediaCollection }: SeoPanelProps) {
   currentScope.current = scope
   const [state, setState] = useState<PanelState>()
   const [selection, setSelection] = useState<{ scope: string; id: string }>()
-  const [groups, setGroups] = useState<Group[]>([])
+  const [groupSelection, setGroupSelection] = useState<{ proposalKey: string; values: Group[] }>()
   const [selectedMedia, setSelectedMedia] = useState<(string | number)[]>([])
   const [pending, setPending] = useState<string>()
   const [notice, setNotice] = useState<{ scope: string; text: string; error?: boolean }>()
   const active = state?.scope === scope ? state : undefined
   const proposals = active?.proposals ?? []
   const proposal = proposals.find((item) => String(item.id) === (selection?.scope === scope ? selection.id : undefined)) ?? proposals[0]
+  const proposalKey = JSON.stringify([scope, proposal?.id])
+  const groups = groupSelection?.proposalKey === proposalKey ? groupSelection.values : []
   const busy = pending === scope
   const canRead = permissions && (permissions.generate || permissions.apply || permissions.manage)
   const saved = id !== undefined && Boolean(collectionSlug) && !modified
@@ -61,25 +66,37 @@ export function SeoPanel({ locales, mediaCollection }: SeoPanelProps) {
 
   useEffect(() => {
     const controller = new AbortController()
-    setGroups([]); setSelectedMedia([]); setPending(undefined); setNotice(undefined)
+    setGroupSelection(undefined); setSelectedMedia([]); setPending(undefined); setNotice(undefined)
     void load(controller.signal).catch((error: unknown) => {
       if (!controller.signal.aborted && currentScope.current === scope) setNotice({ scope, text: errorCopy(error, copy), error: true })
     })
     return () => controller.abort()
   }, [load, scope])
 
+  // Automatic fallback after apply/reject needs a fresh editorial selection too.
+  useEffect(() => { setGroupSelection(undefined) }, [proposalKey])
+
   async function perform(action: 'generate' | 'apply' | 'reject' | 'refresh') {
     if (busy) return
     setPending(scope); setNotice(undefined)
+    let unlockForm: (() => void) | undefined
     try {
       if (action === 'generate') {
         const result = await requestJSON<{ proposal: Proposal }>(`${api}/nim-seo/generate`, { collection: collectionSlug, sourceID: id, locale, selectedMedia })
         if (currentScope.current !== scope) return
         if (!matches(result.proposal)) throw new Error('Mismatched proposal')
-        setSelection({ scope, id: String(result.proposal.id) }); setGroups([])
+        setSelection({ scope, id: String(result.proposal.id) }); setGroupSelection(undefined)
         await load()
         if (currentScope.current === scope) setNotice({ scope, text: result.proposal.state === 'failed' ? copy.failed : copy.generated, error: result.proposal.state === 'failed' })
-      } else if (action === 'apply' && proposal && matches(proposal) && groups.length && saved) {
+      } else if (action === 'apply' && proposal && matches(proposal) && groups.length && saved && !form.disabled && !hostBusy) {
+        // The response replaces saved form values: prevent edits and host saves until
+        // both the API mutation and the asynchronous form reset have completed.
+        form.setDisabled(true)
+        form.setProcessing(true)
+        unlockForm = () => {
+          form.setProcessing(false)
+          form.setDisabled(false)
+        }
         const result = await requestJSON<{ doc: Record<string, unknown> }>(`${api}/nim-seo/apply`, { proposalID: proposal.id, locale, groups })
         if (currentScope.current !== scope) return
         // Replace the form's saved values so a subsequent Save cannot restore old SEO.
@@ -94,7 +111,10 @@ export function SeoPanel({ locales, mediaCollection }: SeoPanelProps) {
       } else if (action === 'refresh') await load()
     } catch (error) {
       if (currentScope.current === scope) setNotice({ scope, text: errorCopy(error, copy), error: true })
-    } finally { if (currentScope.current === scope) setPending(undefined) }
+    } finally {
+      unlockForm?.()
+      if (currentScope.current === scope) setPending(undefined)
+    }
   }
 
   if (!supported) return <p>{copy.unsupportedLocale}</p>
@@ -124,7 +144,7 @@ export function SeoPanel({ locales, mediaCollection }: SeoPanelProps) {
       <button type="button" disabled={busy || !saved} onClick={() => void perform('generate')}>{busy ? copy.generating : copy.generate}</button>
     </>}
     <button type="button" disabled={busy || id === undefined} onClick={() => void perform('refresh')}>{copy.refresh}</button>
-    {proposals.length > 1 && <label>{copy.selectProposal}<select value={String(proposal?.id ?? '')} disabled={busy} onChange={(event) => { setSelection({ scope, id: event.target.value }); setGroups([]) }}>
+    {proposals.length > 1 && <label>{copy.selectProposal}<select value={String(proposal?.id ?? '')} disabled={busy} onChange={(event) => { setSelection({ scope, id: event.target.value }); setGroupSelection(undefined) }}>
       {proposals.map((item) => <option key={item.id} value={String(item.id)}>{String(item.id)} ({item.locale})</option>)}
     </select></label>}
     {!proposal && <p>{copy.noProposal}</p>}
@@ -134,7 +154,10 @@ export function SeoPanel({ locales, mediaCollection }: SeoPanelProps) {
       <h3>{copy.changes}</h3>
       <fieldset disabled={busy || !permissions.apply || proposal.state !== 'draft'}><legend>{copy.selectGroups}</legend>
         {(Object.keys(labels) as Group[]).map((group) => <div key={group}>
-          <label><input type="checkbox" checked={groups.includes(group)} onChange={(event) => setGroups((previous) => event.target.checked ? [...previous, group] : previous.filter((value) => value !== group))} /> {labels[group]}</label>
+          <label><input type="checkbox" checked={groups.includes(group)} onChange={(event) => setGroupSelection((previous) => {
+            const values = previous?.proposalKey === proposalKey ? previous.values : []
+            return { proposalKey, values: event.target.checked ? [...values, group] : values.filter((value) => value !== group) }
+          })} /> {labels[group]}</label>
           <table style={{ width: '100%', tableLayout: 'fixed' }}><thead><tr><th>{copy.current}</th><th>{copy.proposed}</th></tr></thead>
             <tbody><tr><td><pre style={preStyle}>{JSON.stringify(seo[group] ?? null, null, 2)}</pre></td><td><pre style={preStyle}>{JSON.stringify(output[group], null, 2)}</pre></td></tr></tbody>
           </table>
@@ -150,7 +173,7 @@ export function SeoPanel({ locales, mediaCollection }: SeoPanelProps) {
       </dl>
       <h3>{copy.schema}</h3><pre style={preStyle}>{JSON.stringify(output.schema, null, 2)}</pre>
       {permissions.apply && <>
-        <button type="button" disabled={busy || !saved || groups.length === 0 || proposal.state !== 'draft'} onClick={() => void perform('apply')}>{copy.apply}</button>
+        <button type="button" disabled={busy || hostBusy || form.disabled || !saved || groups.length === 0 || proposal.state !== 'draft'} onClick={() => void perform('apply')}>{copy.apply}</button>
         <button type="button" disabled={busy || proposal.state !== 'draft'} onClick={() => void perform('reject')}>{copy.reject}</button>
       </>}
     </>}
