@@ -1,5 +1,6 @@
 import type { EditorialField, EditorialPatch, EditorialProposalPayload, EditorialRegistry, RelatedDraft } from '../types.js'
 import { ProposalValidationError } from './validation.js'
+import { parseEditorialGraph } from './graph.js'
 
 /** Trusted startup schema; never reconstructed from model output or persisted snapshots. */
 export interface EditorialValidationContext {
@@ -53,11 +54,11 @@ interface Reference { localId: string; collection: string; owner?: string }
 /** Validate only explicit patches and drafts; this function performs no reads or writes. */
 export const parseEditorialProposal = (
   value: unknown, registry: EditorialRegistry, locale: string,
-  registries: Record<string, EditorialRegistry> = {},
+  registries: Record<string, EditorialRegistry> = {}, sourceURL?: string,
 ): EditorialProposalPayload => {
   assertJSON(value)
   if (!record(value)) return fail('Expected an editorial proposal object.')
-  keys(value, ['locale', 'patches', 'relatedDrafts'])
+  keys(value, ['locale', 'patches', 'relatedDrafts', 'semanticGraph', 'graphBindings'])
   if (value.locale !== undefined && value.locale !== locale) fail('Editorial locale must match the active locale.')
   if (!Array.isArray(value.patches)) return fail('Expected an editorial patches array.')
   if (value.patches.length > 500 || (Array.isArray(value.relatedDrafts) && value.relatedDrafts.length > 100)) fail('Editorial proposal exceeds validation limits.')
@@ -233,5 +234,16 @@ export const parseEditorialProposal = (
     for (const reference of references) if (!reference.owner || reachable.has(reference.owner)) reachable.add(reference.localId)
   }
   if (relatedDrafts.some(({ localId }) => !reachable.has(localId))) fail('Related draft collection creation is not authorized by an editorial relation.')
-  return structuredClone({ locale, patches, relatedDrafts })
+  const active = new Set<string>(), visited = new Set<string>()
+  const visitDraft = (id: string): void => {
+    if (active.has(id)) fail('Cyclic local draft graph reference.')
+    if (visited.has(id)) return
+    active.add(id)
+    references.filter((reference) => reference.owner === id).forEach((reference) => visitDraft(reference.localId))
+    active.delete(id)
+    visited.add(id)
+  }
+  relatedDrafts.forEach(({ localId }) => visitDraft(localId))
+  const graph = parseEditorialGraph(value.semanticGraph, value.graphBindings, patches, relatedDrafts, sourceURL)
+  return structuredClone({ locale, patches, relatedDrafts, ...graph })
 }

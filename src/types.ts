@@ -56,6 +56,21 @@ export interface EditorialProposalPayload {
   locale: string
   patches: EditorialPatch[]
   relatedDrafts: RelatedDraft[]
+  /** One graph, with property provenance kept outside rendered JSON-LD. */
+  semanticGraph?: EditorialSemanticGraph
+  graphBindings?: EditorialGraphBinding[]
+}
+
+export interface EditorialSemanticGraph extends Record<string, unknown> {
+  '@context': 'https://schema.org'
+  '@graph': Record<string, unknown>[]
+}
+
+/** Every non-draft node property belongs to exactly one proposed patch. */
+export interface EditorialGraphBinding {
+  path: string
+  nodeId: string
+  properties: string[]
 }
 
 /** The host owns content extraction and localized public routing. */

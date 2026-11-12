@@ -165,7 +165,7 @@ export const parseProposalOutput = (value: unknown, input: Pick<GenerationInput,
     if (editorial.locale !== (input as Partial<GenerationInput>).locale && (input as Partial<GenerationInput>).locale !== undefined) {
       throw new ProposalValidationError([{ code: 'invalid_editorial', path: 'editorial', message: 'Editorial locale must match the source locale.' }])
     }
-    editorialOutput = parseEditorialProposal(rawEditorial, editorial.registry, editorial.locale, editorial.registries)
+    editorialOutput = parseEditorialProposal(rawEditorial, editorial.registry, editorial.locale, editorial.registries, input.url)
     decoded = seo
   }
   const result = proposalSchema.safeParse(decoded)
