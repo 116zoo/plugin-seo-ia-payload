@@ -23,9 +23,23 @@ export const validatePluginOptions = (
   }
 
   const hostCollections = new Set(config.collections?.map(({ slug }) => slug))
+  // Plugin-owned models must never adopt host definitions with unknown access/validation.
+  for (const slug of ['seo-proposals', 'seo-runs']) {
+    if (hostCollections.has(slug)) {
+      throw configurationError(
+        `${slug}: collection slug is reserved by this plugin; remove or rename the existing collection.`,
+      )
+    }
+  }
   for (const [slug, collection] of collections) {
     if (!hostCollections.has(slug)) {
       throw configurationError(`${slug}: target collection must exist in Payload collections.`)
+    }
+    const hostCollection = config.collections!.find((candidate) => candidate.slug === slug)!
+    if (hostCollection.fields.some((field) => 'name' in field && field.name === 'seo')) {
+      throw configurationError(
+        `${slug}.seo: field name is reserved by this plugin; remove or rename the existing field.`,
+      )
     }
     for (const field of ['titleField', 'mediaCollection'] as const) {
       if (!isNonEmptyString(collection?.[field])) {
@@ -88,7 +102,7 @@ export const nimSeoPlugin = (options: NimSeoPluginOptions): Plugin => (config) =
   const validated = validatePluginOptions(options, config)
   const collections = (config.collections ?? []).map((collection) => {
     const target = validated.collections[collection.slug]
-    if (!target || collection.fields.some((field) => 'name' in field && field.name === 'seo')) {
+    if (!target) {
       return collection
     }
     return {
@@ -100,8 +114,7 @@ export const nimSeoPlugin = (options: NimSeoPluginOptions): Plugin => (config) =
     }
   })
   for (const build of [buildProposalsCollection, buildRunsCollection]) {
-    const internal = build(validated)
-    if (!collections.some(({ slug }) => slug === internal.slug)) collections.push(internal)
+    collections.push(build(validated))
   }
   return { ...config, collections }
 }

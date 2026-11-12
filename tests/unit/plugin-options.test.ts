@@ -1,4 +1,4 @@
-import type { Config } from 'payload'
+import type { Config, Field } from 'payload'
 import { describe, expect, test } from 'vitest'
 
 import { nimSeoPlugin, validatePluginOptions } from '../../src/index.js'
@@ -194,7 +194,7 @@ describe('nimSeoPlugin', () => {
     expect(config.collections?.[0].fields).toEqual(originalFields)
   })
 
-  test('uses each target collection media adapter and retains existing SEO fields', async () => {
+  test('uses each target collection media adapter', async () => {
     const config = makeConfig()
     const options = makeOptions()
     options.collections.pages = { ...options.collections.posts, mediaCollection: 'page-media' }
@@ -207,19 +207,51 @@ describe('nimSeoPlugin', () => {
         ]) }),
       ]) }),
     )
-    const existingSEO = { name: 'seo', type: 'group' as const, fields: [{ name: 'host', type: 'text' as const }] }
-    config.collections![0].fields.push(existingSEO)
-    const withExisting = await nimSeoPlugin(options)(config)
-    expect(withExisting.collections?.[0].fields.filter((field) => 'name' in field && field.name === 'seo')).toEqual([existingSEO])
   })
 
-  test('preserves existing workflow collections without duplicate slugs', async () => {
+  test.each(['seo-proposals', 'seo-runs'])(
+    'rejects reserved workflow collection %s without mutating the host',
+    (slug) => {
+      const config = makeConfig()
+      const collision = {
+        slug,
+        access: { read: () => true },
+        fields: [{ name: 'hostField', type: 'text' as const }],
+      }
+      config.collections!.push(collision)
+      const originalCollections = config.collections
+      const originalFields = collision.fields
+      expect(() => nimSeoPlugin(makeOptions())(config)).toThrow(new RegExp(`${slug}.*reserved`, 'i'))
+      expect(config.collections).toBe(originalCollections)
+      expect(config.collections!.at(-1)).toBe(collision)
+      expect(collision.fields).toBe(originalFields)
+      expect(config.collections![0].fields).toEqual([{ name: 'title', type: 'text', localized: true }])
+    },
+  )
+
+  test.each<Field>([
+    { name: 'seo', type: 'text' },
+    { name: 'seo', type: 'group', fields: [{ name: 'host', type: 'text' }] },
+    { name: 'seo', type: 'group', localized: true, fields: [] },
+    { name: 'seo', type: 'group', localized: true, fields: [{ name: 'citability', type: 'group', fields: [{ name: 'summary', type: 'textarea', maxLength: 2001 }] }] },
+    { name: 'seo', type: 'group', localized: true, fields: [{ name: 'citability', type: 'group', fields: [{ name: 'summary', type: 'textarea', maxLength: 2000, validate: () => true }] }] },
+  ])('rejects pre-existing reserved SEO fields without changing their schema ($type)', (field) => {
     const config = makeConfig()
-    const existingProposals = { slug: 'seo-proposals', fields: [{ name: 'hostField', type: 'text' as const }] }
-    const existingRuns = { slug: 'seo-runs', fields: [] }
-    config.collections!.push(existingProposals, existingRuns)
+    config.collections![0].fields.push(field)
+    const originalFields = config.collections![0].fields
+    expect(() => nimSeoPlugin(makeOptions())(config)).toThrow(/posts.*seo.*reserved/i)
+    expect(config.collections![0].fields).toBe(originalFields)
+    expect(config.collections![0].fields.at(-1)).toBe(field)
+  })
+
+  test('preserves unrelated internal collections and SEO fields on untargeted collections', async () => {
+    const config = makeConfig()
+    const internal = { slug: 'host-private-records', access: { read: () => false }, fields: [] }
+    config.collections!.push(internal)
+    const media = config.collections![1]
+    media.fields.push({ name: 'seo', type: 'text' })
     const result = await nimSeoPlugin(makeOptions())(config)
-    expect(result.collections?.filter(({ slug }) => slug === 'seo-proposals')).toEqual([existingProposals])
-    expect(result.collections?.filter(({ slug }) => slug === 'seo-runs')).toEqual([existingRuns])
+    expect(result.collections?.find(({ slug }) => slug === internal.slug)).toBe(internal)
+    expect(result.collections?.find(({ slug }) => slug === 'media')).toBe(media)
   })
 })
