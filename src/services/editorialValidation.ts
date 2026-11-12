@@ -244,6 +244,6 @@ export const parseEditorialProposal = (
     visited.add(id)
   }
   relatedDrafts.forEach(({ localId }) => visitDraft(localId))
-  const graph = parseEditorialGraph(value.semanticGraph, value.graphBindings, patches, relatedDrafts, sourceURL)
+  const graph = parseEditorialGraph(value.semanticGraph, value.graphBindings, patches, relatedDrafts, sourceURL, registry)
   return structuredClone({ locale, patches, relatedDrafts, ...graph })
 }

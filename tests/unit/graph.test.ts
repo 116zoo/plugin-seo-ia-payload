@@ -16,7 +16,7 @@ const tags: EditorialRegistry = { collection: 'tags', exclude: ['content'], rela
 ] }
 const sourceID = 'https://site.test/fr/post#article'
 const sourceURL = 'https://site.test/fr/post'
-const buildAppliedGraph = (args: AppliedGraphArgs) => buildGraph({ sourceURL, ...args })
+const buildAppliedGraph = (args: AppliedGraphArgs) => buildGraph({ sourceURL, registry, ...args })
 const raw = () => ({ locale: 'fr', patches: [
   { path: 'title', operation: 'set', value: 'Titre' }, { path: 'excerpt', operation: 'set', value: 'Résumé' },
   { path: 'tags', operation: 'set', value: [{ localId: 'tag-1' }] },
@@ -164,5 +164,48 @@ describe('semantic graph validation before persistence', () => {
     for (let depth = 0; depth < 40; depth++) nested = { name: nested }
     Object.assign(value.semanticGraph['@graph'][0], { headline: nested })
     expect(() => parseEditorialProposal(value, registry, 'fr', { tags }, sourceURL)).toThrow(/limit/i)
+  })
+
+  test.each(['Article', 'BlogPosting', 'WebPage', 'FAQPage', 'BreadcrumbList'])('allows declared related page drafts (%s) with their own resolved IDs', (type) => {
+    const value = raw()
+    value.semanticGraph['@graph'][1]['@type'] = type
+    const proposal = parseEditorialProposal(value, registry, 'fr', { tags }, sourceURL)
+    const graph = buildAppliedGraph({ proposal, selectedPatches: ['title', 'tags'], selectedDrafts: ['tag-1'], resolvedDrafts: { 'tag-1': 'https://site.test/fr/related-page#page' } })
+    expect(graph['@graph']).toContainEqual({ '@id': 'https://site.test/fr/related-page#page', '@type': type, name: 'Art' })
+  })
+
+  test.each(['relatedPosts', 'details.related'])('distinguishes scalar source bindings from existing relation-bound pages (%s)', (path) => {
+    const relationRegistry: EditorialRegistry = { ...registry, fields: [...registry.fields, {
+      path, type: 'relationship', field: { name: 'related', type: 'relationship', relationTo: 'posts', localized: true },
+      relation: { relationTo: 'posts', allowCreate: false }, ancestors: path.includes('.') ? [{ path: 'details', type: 'group' }] : [],
+    }] }
+    const relatedID = 'https://site.test/fr/related#page'
+    const value = raw()
+    value.patches.push({ path, operation: 'set', value: 42 } as never)
+    value.semanticGraph['@graph'].push({ '@id': relatedID, '@type': 'WebPage', name: 'Related page' } as never)
+    Object.assign(value.semanticGraph['@graph'][0], { hasPart: { '@id': relatedID } })
+    value.graphBindings.push({ path, nodeId: sourceID, properties: ['hasPart'] }, { path, nodeId: relatedID, properties: ['name'] })
+    const proposal = parseEditorialProposal(value, relationRegistry, 'fr', { tags }, sourceURL)
+    expect(buildAppliedGraph({ proposal, registry: relationRegistry, selectedPatches: ['title', path], selectedDrafts: [] })['@graph']).toContainEqual({ '@id': relatedID, '@type': 'WebPage', name: 'Related page' })
+    expect(() => buildAppliedGraph({ proposal, registry: undefined, selectedPatches: ['title', path], selectedDrafts: [] })).toThrow(/graph/i)
+    value.graphBindings[value.graphBindings.length - 1].path = 'title'
+    expect(() => parseEditorialProposal(value, relationRegistry, 'fr', { tags }, sourceURL)).toThrow(/graph/i)
+  })
+
+  test('allows inline related pages only under trusted relation-bound properties', () => {
+    const value = raw()
+    Object.assign(value.semanticGraph['@graph'][0], { about: { '@id': 'https://site.test/fr/related#page', '@type': 'WebPage', name: 'Related' } })
+    const proposal = parseEditorialProposal(value, registry, 'fr', { tags }, sourceURL)
+    expect(buildAppliedGraph({ proposal, selectedPatches: ['tags'], selectedDrafts: ['tag-1'], resolvedDrafts: { 'tag-1': 'https://site.test/fr/tags/1' } })['@graph'][0].about).toEqual({ '@id': 'https://site.test/fr/related#page', '@type': 'WebPage', name: 'Related' })
+    value.graphBindings[2].path = 'title'
+    expect(() => parseEditorialProposal(value, registry, 'fr', { tags }, sourceURL)).toThrow(/graph/i)
+  })
+
+  test('does not require the source URL for a related page draft within a non-page graph', () => {
+    const value = raw()
+    value.semanticGraph['@graph'][0]['@type'] = 'Organization'
+    value.semanticGraph['@graph'][1]['@type'] = 'Article'
+    const proposal = parseEditorialProposal(value, registry, 'fr', { tags })
+    expect(buildAppliedGraph({ proposal, sourceURL: undefined, selectedPatches: ['tags'], selectedDrafts: ['tag-1'], resolvedDrafts: { 'tag-1': 'https://site.test/fr/article' } })['@graph'][1]['@type']).toBe('Article')
   })
 })

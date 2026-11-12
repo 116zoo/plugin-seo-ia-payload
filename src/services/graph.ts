@@ -1,4 +1,4 @@
-import type { EditorialGraphBinding, EditorialPatch, EditorialProposalPayload, EditorialSemanticGraph, RelatedDraft } from '../types.js'
+import type { EditorialGraphBinding, EditorialPatch, EditorialProposalPayload, EditorialRegistry, EditorialSemanticGraph, RelatedDraft } from '../types.js'
 import { isPublicURL } from './content.js'
 import { parseProposalOutput, ProposalValidationError } from './validation.js'
 
@@ -54,7 +54,7 @@ const assertAcyclicLocalGraph = (edges: Map<string, Set<string>>, local: (id: st
 
 /** Validates graph structure/provenance; called only after schema-aware patch/draft validation. */
 export const parseEditorialGraph = (
-  semanticGraph: unknown, graphBindings: unknown, patches: EditorialPatch[], relatedDrafts: RelatedDraft[], sourceURL?: string,
+  semanticGraph: unknown, graphBindings: unknown, patches: EditorialPatch[], relatedDrafts: RelatedDraft[], sourceURL?: string, registry?: EditorialRegistry,
 ): { semanticGraph?: EditorialSemanticGraph; graphBindings?: EditorialGraphBinding[] } => {
   if (semanticGraph === undefined && graphBindings === undefined) return {}
   if (!record(semanticGraph) || Object.keys(semanticGraph).some((key) => !['@context', '@graph'].includes(key))
@@ -64,23 +64,45 @@ export const parseEditorialGraph = (
   const nodes = semanticGraph['@graph'] as unknown[]
   const ids = new Set<string>()
   const drafts = new Set(relatedDrafts.map(({ graphNodeId }) => graphNodeId))
-  const assertSource = (node: Record<string, unknown>): void => {
+  const propertySources = new Map<string, boolean | undefined>()
+  const nodeSources = new Map<string, boolean | undefined>()
+  // Classification comes from the startup registry, never from a model's claimed role.
+  // Exact paths also cover relationships nested under groups, tabs, arrays and blocks.
+  for (const binding of graphBindings) {
+    if (!record(binding) || typeof binding.path !== 'string' || typeof binding.nodeId !== 'string' || !Array.isArray(binding.properties)) continue
+    const field = registry?.fields.find(({ path }) => path === binding.path)
+    const source = field ? !['relationship', 'upload'].includes(field.type) : undefined
+    const previous = nodeSources.get(binding.nodeId)
+    nodeSources.set(binding.nodeId, source === true || previous === true ? true
+      : source === undefined || (nodeSources.has(binding.nodeId) && previous === undefined) ? undefined : false)
+    for (const property of binding.properties) propertySources.set(JSON.stringify([binding.nodeId, property]), source)
+  }
+  const assertSource = (node: Record<string, unknown>, sourceBound?: boolean): void => {
     const types = Array.isArray(node['@type']) ? node['@type'] : [node['@type']]
-    if (types.some((type) => typeof type === 'string' && pageTypes.has(type)) && (!sourceURL || !isPublicURL(sourceURL))) fail()
+    if (!types.some((type) => typeof type === 'string' && pageTypes.has(type))) return
+    const id = node['@id']
+    // Declared draft pages identify related documents, not the source page.
+    if (typeof id === 'string' && drafts.has(id as `draft:${string}`)) return
+    if (typeof id !== 'string' || !isPublicURL(id)) return fail()
+    const trustedSource = sourceURL && isPublicURL(sourceURL) ? withoutHash(sourceURL) : undefined
+    if (trustedSource && withoutHash(id) === trustedSource) return
+    // Related public pages can keep their own URL only with trusted relation-field provenance.
+    if (sourceBound === false) return
+    if (sourceBound === undefined || !trustedSource) return fail()
     if (types.some((type) => typeof type === 'string' && sourceTypes.has(type))
-      && (typeof node['@id'] !== 'string' || !isPublicURL(node['@id']) || withoutHash(node['@id']) !== withoutHash(sourceURL!))) fail()
+      && withoutHash(id) !== trustedSource) fail()
   }
   for (const node of nodes) {
     if (!record(node) || !graphID(node['@id']) || ids.has(node['@id']) || node['@type'] === undefined) return fail()
     if (draftID(node['@id']) && !drafts.has(node['@id'] as `draft:${string}`)) fail()
-    assertSource(node)
+    assertSource(node, nodeSources.get(node['@id']))
     ids.add(node['@id'])
   }
   if ([...drafts].some((id) => !ids.has(id))) fail()
   const edges = new Map<string, Set<string>>()
   const ancestors = new Set<object>()
   let count = 0
-  const sanitize = (value: unknown, owner: string, depth = 0, key?: string): unknown => {
+  const sanitize = (value: unknown, owner: string, depth = 0, key?: string, sourceBound?: boolean): unknown => {
     if (++count > 5000 || depth > 32) return fail()
     if (key === '@id') {
       if (!graphID(value)) return fail()
@@ -94,13 +116,13 @@ export const parseEditorialGraph = (
     if (typeof value !== 'object' || ancestors.has(value)) return fail()
     ancestors.add(value)
     let result: unknown
-    if (Array.isArray(value)) result = value.map((entry) => sanitize(entry, owner, depth + 1, key))
+    if (Array.isArray(value)) result = value.map((entry) => sanitize(entry, owner, depth + 1, key, sourceBound))
     else {
       if (!record(value)) return fail()
-      assertSource(value)
+      assertSource(value, sourceBound)
       result = Object.fromEntries(Object.entries(value).map(([property, entry]) => {
         if (!['@id', '@type'].includes(property) && !properties.has(property)) fail()
-        return [property, sanitize(entry, owner, depth + 1, property)]
+        return [property, sanitize(entry, owner, depth + 1, property, sourceBound)]
       }))
     }
     ancestors.delete(value)
@@ -114,7 +136,7 @@ export const parseEditorialGraph = (
     // Already checked the top-level source ID; nested source nodes are checked by sanitize.
     const result = Object.fromEntries(Object.entries(values).map(([key, value]) => {
       if (key !== '@type' && !properties.has(key)) fail()
-      return [key, sanitize(value, id, 1, key)]
+      return [key, sanitize(value, id, 1, key, draftID(id) ? false : propertySources.get(JSON.stringify([id, key])))]
     }))
     return { ...result, '@id': draftID(id) ? `https://nim-seo.invalid/drafts/${id.slice(6)}` : id }
   })
@@ -158,10 +180,12 @@ export interface AppliedGraphArgs {
   resolvedDrafts?: Readonly<Record<string, string>>
   /** Trusted localized source URL from the host adapter; never a model-provided URL. */
   sourceURL?: string
+  /** Trusted startup registry, required to distinguish related page nodes from source bindings. */
+  registry?: EditorialRegistry
 }
 
 /** Pure reconciliation: no database access and no mutation of the proposal. */
-export const buildAppliedGraph = ({ proposal, selectedPatches, selectedDrafts, resolvedDrafts = {}, sourceURL }: AppliedGraphArgs): EditorialSemanticGraph => {
+export const buildAppliedGraph = ({ proposal, selectedPatches, selectedDrafts, resolvedDrafts = {}, sourceURL, registry }: AppliedGraphArgs): EditorialSemanticGraph => {
   const paths = new Set(selectedPatches), selected = new Set(selectedDrafts)
   if (paths.size !== selectedPatches.length || selected.size !== selectedDrafts.length
     || [...paths].some((path) => path.split('.').some((part) => part.toLowerCase() === 'content') || !proposal.patches.some((patch) => patch.path === path))
@@ -177,7 +201,7 @@ export const buildAppliedGraph = ({ proposal, selectedPatches, selectedDrafts, r
   }
   proposal.patches.filter(({ path }) => paths.has(path)).forEach(({ value }) => visit(value))
   if ([...selected].some((id) => !reachable.has(id))) fail()
-  const parsed = parseEditorialGraph(proposal.semanticGraph, proposal.graphBindings, proposal.patches, proposal.relatedDrafts, sourceURL)
+  const parsed = parseEditorialGraph(proposal.semanticGraph, proposal.graphBindings, proposal.patches, proposal.relatedDrafts, sourceURL, registry)
   if (!parsed.semanticGraph) return { '@context': 'https://schema.org', '@graph': [] }
   const originalIDs = new Set(parsed.semanticGraph['@graph'].map((node) => node['@id'] as string))
   const replacements = new Set<string>()
