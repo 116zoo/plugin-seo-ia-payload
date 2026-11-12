@@ -35,6 +35,29 @@ export interface EditorialRegistry {
   relations: Record<string, EditorialRelationOptions>
 }
 
+export interface EditorialPatch {
+  /** Exact configured schema path. */
+  path: string
+  operation: 'set'
+  value: unknown
+  rationale?: string
+}
+
+export interface RelatedDraft {
+  collection: string
+  localId: string
+  locale: string
+  /** Values keyed by exact configured editorial paths, never arbitrary document data. */
+  fields: Record<string, unknown>
+  graphNodeId: `draft:${string}`
+}
+
+export interface EditorialProposalPayload {
+  locale: string
+  patches: EditorialPatch[]
+  relatedDrafts: RelatedDraft[]
+}
+
 /** The host owns content extraction and localized public routing. */
 export interface CollectionSeoOptions {
   titleField: string
@@ -89,6 +112,7 @@ export interface ValidatedPluginOptions extends NimSeoPluginOptions {
 
 /** Unapplied proposal data, reviewed by an editor before becoming approved SEO. */
 export interface SeoProposalPayload {
+  editorial?: EditorialProposalPayload
   meta: {
     title: string
     description: string

@@ -6,7 +6,7 @@ import type { SeoAudit } from '../services/audit.js'
 import type { SeoProposalPayload } from '../types.js'
 import { errorCopy, panelStyle, preStyle, requestJSON, useSeoContext, WorkflowError } from './shared.js'
 
-type Group = keyof SeoProposalPayload
+type Group = Exclude<keyof SeoProposalPayload, 'editorial'>
 type Proposal = {
   id: string | number; sourceCollection: string; sourceID: string; locale: string; state: string
   output?: SeoProposalPayload; errors?: { code: string; path?: string }[]; warnings?: string[]

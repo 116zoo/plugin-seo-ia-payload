@@ -5,10 +5,13 @@ export type {
   EditorialField,
   EditorialFieldOptions,
   EditorialFieldType,
+  EditorialPatch,
+  EditorialProposalPayload,
   EditorialRegistry,
   EditorialRelationOptions,
   NimConfig,
   NimSeoPluginOptions,
+  RelatedDraft,
   SeoProposalPayload,
   ValidatedPluginOptions,
 } from './types.js'

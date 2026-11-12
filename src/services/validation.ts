@@ -1,6 +1,7 @@
 import { z } from 'zod'
 
 import type { SeoProposalPayload } from '../types.js'
+import { parseEditorialProposal, type EditorialValidationContext } from './editorialValidation.js'
 import { isPublicURL, type GenerationInput } from './content.js'
 
 export interface ProposalValidationDiagnostic {
@@ -149,7 +150,7 @@ const diagnosticsFromIssues = (issues: z.core.$ZodIssue[]): ProposalValidationDi
 }))
 
 /** Validate the complete proposal before a caller can persist it or offer editorial review. */
-export const parseProposalOutput = (value: unknown, input: Pick<GenerationInput, 'url' | 'selectedMedia'>): SeoProposalPayload => {
+export const parseProposalOutput = (value: unknown, input: Pick<GenerationInput, 'url' | 'selectedMedia'>, editorial?: EditorialValidationContext): SeoProposalPayload => {
   let decoded: unknown = value
   if (typeof value === 'string') {
     try {
@@ -157,6 +158,15 @@ export const parseProposalOutput = (value: unknown, input: Pick<GenerationInput,
     } catch {
       throw new ProposalValidationError([{ code: 'invalid_json', message: 'Expected a JSON proposal object.', path: '' }])
     }
+  }
+  let editorialOutput: SeoProposalPayload['editorial']
+  if (editorial && decoded && typeof decoded === 'object' && !Array.isArray(decoded) && Object.hasOwn(decoded, 'editorial')) {
+    const { editorial: rawEditorial, ...seo } = decoded as Record<string, unknown>
+    if (editorial.locale !== (input as Partial<GenerationInput>).locale && (input as Partial<GenerationInput>).locale !== undefined) {
+      throw new ProposalValidationError([{ code: 'invalid_editorial', path: 'editorial', message: 'Editorial locale must match the source locale.' }])
+    }
+    editorialOutput = parseEditorialProposal(rawEditorial, editorial.registry, editorial.locale, editorial.registries)
+    decoded = seo
   }
   const result = proposalSchema.safeParse(decoded)
   if (!result.success) throw new ProposalValidationError(diagnosticsFromIssues(result.error.issues))
@@ -171,5 +181,5 @@ export const parseProposalOutput = (value: unknown, input: Pick<GenerationInput,
   // @graph members inherit this root context; never add contexts recursively.
   const uniqueGraphs = new Set(graphs.map((graph) => JSON.stringify(sortedJSON({ ...graph, '@context': 'https://schema.org' }))))
   output.schema = [...uniqueGraphs].map((graph) => JSON.parse(graph) as Record<string, unknown>)
-  return output
+  return { ...output, ...(editorialOutput ? { editorial: editorialOutput } : {}) }
 }

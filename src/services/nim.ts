@@ -1,4 +1,5 @@
 import type { NimConfig, SeoProposalPayload } from '../types.js'
+import type { EditorialValidationContext } from './editorialValidation.js'
 import type { GenerationInput } from './content.js'
 import { parseProposalOutput, ProposalValidationError, type ProposalValidationDiagnostic } from './validation.js'
 import { providerUsage, type NimUsage } from './usage.js'
@@ -63,7 +64,7 @@ const endpointFor = (config: NimConfig): string => {
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value)
 
 /** Server-only OpenAI-compatible transport. Only validated proposals leave this boundary. */
-export const createNimClient = (config: NimConfig): NimClient => {
+export const createNimClient = (config: NimConfig, editorial?: EditorialValidationContext): NimClient => {
   if (typeof window !== 'undefined') throw new NimGenerationError('server_only')
   const endpoint = endpointFor(config)
   const { apiKey, model } = config
@@ -102,7 +103,7 @@ export const createNimClient = (config: NimConfig): NimClient => {
       }
       if (typeof choice.message.content !== 'string' || !choice.message.content.trim()) throw new NimGenerationError('invalid_response', undefined, usage)
       try {
-        return { output: parseProposalOutput(choice.message.content, input), ...(usage ? { usage } : {}) }
+        return { output: parseProposalOutput(choice.message.content, input, editorial), ...(usage ? { usage } : {}) }
       } catch (error) {
         throw error instanceof ProposalValidationError
           ? new NimGenerationError('invalid_output', error, usage)

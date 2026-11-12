@@ -3,6 +3,7 @@ import { commitTransaction, initTransaction, killTransaction, type Document, typ
 import { allowSeo } from '../collections/shared.js'
 import type { SeoProposalPayload, ValidatedPluginOptions } from '../types.js'
 import { buildGenerationInput, type BuildGenerationInputArgs, type GenerationInput } from './content.js'
+import { resolveEditorialRegistry } from './editorialSchema.js'
 import { createNimClient, NimGenerationError, type NimClient } from './nim.js'
 import { parseProposalOutput, ProposalValidationError, type ProposalValidationDiagnostic } from './validation.js'
 import { validateUsage, type NimUsage } from './usage.js'
@@ -43,11 +44,14 @@ export const createProposal = async (args: CreateProposalArgs): Promise<SeoPropo
   let usage: NimUsage | undefined
   let errors: ProposalValidationDiagnostic[] | undefined
   try {
-    const client = args.client ?? createNimClient(options.nim)
+    const editorial = options.collections[input.collection].editorialFields
+      ? { registry: resolveEditorialRegistry(options, input.collection), registries: options.editorialRegistries, locale: input.locale }
+      : undefined
+    const client = args.client ?? createNimClient(options.nim, editorial)
     // Keep the persistence boundary strict even with a trusted custom transport.
     const generated = await client.generate(input)
     usage = validateUsage(generated.usage)
-    output = parseProposalOutput(generated.output, input)
+    output = parseProposalOutput(generated.output, input, editorial)
   } catch (error) {
     if (error instanceof ProposalValidationError) errors = error.diagnostics
     else if (error instanceof NimGenerationError) {
@@ -73,7 +77,7 @@ export const createProposal = async (args: CreateProposalArgs): Promise<SeoPropo
   return saved as unknown as SeoProposal
 }
 
-export type SeoProposalGroup = keyof SeoProposalPayload
+export type SeoProposalGroup = Exclude<keyof SeoProposalPayload, 'editorial'>
 
 const proposalFields = {
   meta: ['title', 'description', 'canonical', 'robots', 'focusKeyphrase'],
@@ -112,7 +116,9 @@ export const applyProposal = async ({ options, req, proposal: identity, locale, 
       collection: options.collections[proposal.sourceCollection].mediaCollection, id, locale, fallbackLocale: false,
       depth: 0, req, overrideAccess: false,
     })))
-    const output = parseProposalOutput(proposal.output, proposal.sourceSnapshot)
+    const output = parseProposalOutput(proposal.output, proposal.sourceSnapshot, options.collections[proposal.sourceCollection].editorialFields
+      ? { registry: resolveEditorialRegistry(options, proposal.sourceCollection), registries: options.editorialRegistries, locale }
+      : undefined)
     const doc = await req.payload.findByID({
       collection: proposal.sourceCollection, id: proposal.sourceID, locale, fallbackLocale: false,
       draft: true, depth: 0, req, overrideAccess: false,
