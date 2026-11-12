@@ -1,55 +1,14 @@
-import { createLocalReq, type PayloadRequest, type TaskConfig, type Where } from 'payload'
+import type { TaskConfig, Where } from 'payload'
 import { z } from 'zod'
-import { allowSeo } from '../collections/shared.js'
-import type { SeoAudit } from '../services/audit.js'
 import type { ValidatedPluginOptions } from '../types.js'
 import { generateDocumentProposal } from './generateProposal.js'
+import { loadScheduledRun, type RunResult } from './execution.js'
 
 export const batchSchema = (options: ValidatedPluginOptions) => z.object({
   collections: z.array(z.string().refine((collection) => Object.hasOwn(options.collections, collection))).min(1).transform((values) => [...new Set(values)]),
   locales: z.array(z.string().refine((locale) => options.locales.includes(locale))).min(1).transform((values) => [...new Set(values)]),
   filter: z.record(z.string(), z.unknown()).optional(),
 })
-interface RunError { sourceCollection?: string; sourceID?: string; locale?: string; code: string; message: string }
-interface RunResult { sourceCollection: string; sourceID: string; locale: string; proposalID?: string; state: string; audit?: SeoAudit }
-interface SeoRun {
-  id: string | number
-  jobID?: string
-  collections: string[]
-  locales: string[]
-  filter?: Where
-  actor?: { collection?: string; userID?: string }
-  state: string
-  progress: { total: number; completed: number; failed: number }
-  errors?: RunError[]
-  results?: RunResult[]
-}
-
-/** Only this job's persisted actor may supply a worker identity; no user snapshot in input. */
-const loadRun = async (options: ValidatedPluginOptions, workerReq: PayloadRequest, runID: string, jobID: string | number) => {
-  if (!options.bulk) throw new Error('SEO bulk jobs are disabled.')
-  // Identity bootstrap only. Never read source content with privileged access.
-  const run = await workerReq.payload.findByID({ collection: 'seo-runs', id: runID, depth: 0, req: workerReq, overrideAccess: true }) as unknown as SeoRun
-  if (!run.jobID || run.jobID !== String(jobID)) throw new Error('SEO job does not match its authorized run.')
-  const actor = run.actor
-  const authCollection = actor?.collection ? workerReq.payload.collections[actor.collection] : undefined
-  let req: PayloadRequest | undefined
-  if (authCollection?.config.auth && actor?.collection && actor.userID) {
-    try {
-      const user = await workerReq.payload.findByID({ collection: actor.collection, id: actor.userID, depth: 0, req: workerReq, overrideAccess: true })
-      req = await createLocalReq({ user: { ...user, collection: actor.collection } as NonNullable<PayloadRequest['user']> }, workerReq.payload)
-    } catch { /* Deleted/invalid identities are rejected with a fixed message below. */ }
-  }
-  if (!req || !await allowSeo(options, ['manage'])({ req })) {
-    if (run.state === 'queued' || run.state === 'running') await workerReq.payload.update({
-      collection: 'seo-runs', id: run.id, req: workerReq, overrideAccess: true,
-      data: { state: 'failed', finishedAt: new Date().toISOString(), errors: [...(run.errors ?? []), { code: 'permission_denied', message: 'SEO batch manager permission is no longer available.' }] },
-    })
-    throw new Error('SEO batch manager permission is no longer available.')
-  }
-  return { run, req }
-}
-
 export const runAuditTask = (options: ValidatedPluginOptions): TaskConfig<{
   input: { runID: string }
   output: { runID: string; completed: number; failed: number }
@@ -58,7 +17,7 @@ export const runAuditTask = (options: ValidatedPluginOptions): TaskConfig<{
   inputSchema: [{ name: 'runID', type: 'text', required: true }],
   outputSchema: [{ name: 'runID', type: 'text' }, { name: 'completed', type: 'number' }, { name: 'failed', type: 'number' }],
   handler: async ({ input, req: workerReq, job }) => {
-    const { req, run } = await loadRun(options, workerReq, input.runID, job.id)
+    const { req, run } = await loadScheduledRun(options, workerReq, input.runID, job.id, 'batch')
     const result = () => ({ output: { runID: String(run.id), completed: run.progress.completed, failed: run.progress.failed } })
     if (!['queued', 'running'].includes(run.state)) return result()
     const save = async (data: Record<string, unknown>) => req.payload.update({ collection: 'seo-runs', id: run.id, req, overrideAccess: false, depth: 0, data })

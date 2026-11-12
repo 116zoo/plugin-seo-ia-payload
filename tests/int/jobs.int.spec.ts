@@ -1,6 +1,6 @@
-import { afterAll, beforeAll, describe, expect, test } from 'vitest'
+import { afterAll, beforeAll, describe, expect, test, vi } from 'vitest'
 import { auditEndpoint } from '../../src/endpoints/audit.js'
-import { generateDocumentProposal, generateProposalTask } from '../../src/jobs/generateProposal.js'
+import { generateDocumentProposal, generateProposalTask, queueGenerateProposal } from '../../src/jobs/generateProposal.js'
 import { runAuditTask } from '../../src/jobs/runAudit.js'
 import { fixture } from './endpointFixture.js'
 
@@ -59,6 +59,45 @@ describe('Payload jobs create proposals without application', () => {
     expect(f.transport).toHaveBeenCalledTimes(calls)
     expect((await f.payload.findByID({ collection: 'seo-runs', id: run.id })).state).toBe('queued')
   })
+  test('cannot forge or replace persisted manager actor and job binding', async () => {
+    const req = await f.request('manager')
+    req.context = { seoRunScheduling: true }
+    const record = await f.payload.create({ collection: 'seo-runs', req, overrideAccess: false, data: { collections: ['posts'], locales: ['fr'], actor: { collection: 'users', userID: String(f.users.editor.id) }, jobID: 'forged-job' } })
+    expect(record.actor).toEqual({ collection: 'users', userID: String(f.users.manager.id) })
+    expect(record.jobID).toBeFalsy()
+    const { run } = await schedule((await f.post()).id, ['fr'])
+    const changed = await f.payload.update({ collection: 'seo-runs', id: run.id, req, overrideAccess: false, data: { actor: { collection: 'users', userID: String(f.users.editor.id) }, jobID: 'replacement-job', collections: ['posts'], locales: ['en'], filter: { id: { exists: true } } } })
+    expect(changed.actor).toEqual(run.actor)
+    expect(changed.jobID).toEqual(run.jobID)
+    expect(changed.locales).toEqual(run.locales)
+    expect(changed.filter).toEqual(run.filter)
+    const privilegedAttempt = await f.payload.update({ collection: 'seo-runs', id: run.id, req, overrideAccess: true, data: { actor: { collection: 'users', userID: String(f.users.editor.id) }, jobID: 'another-job' } })
+    expect(privilegedAttempt.actor).toEqual(run.actor)
+    expect(privilegedAttempt.jobID).toBe(run.jobID)
+  })
+  test('a limited manager cannot substitute a broader manager actor to read restricted content', async () => {
+    const limited = await f.payload.create({ collection: 'users', data: { email: 'limited-manager@example.test', password: 'fixture-password', role: 'manager', scope: 'limited' } })
+    f.users['limited-manager'] = { ...limited, collection: 'users' } as NonNullable<typeof f.users[string]>
+    const restricted = await f.post('Restricted')
+    const response = await auditEndpoint(f.options).handler(await f.request('limited-manager', { mode: 'batch', collections: ['posts'], locales: ['fr'], filter: { id: { equals: restricted.id } } }))
+    const { run, jobID } = await response.json()
+    await f.payload.update({ collection: 'seo-runs', id: run.id, req: await f.request('limited-manager'), overrideAccess: false, data: { actor: { collection: 'users', userID: String(f.users.manager.id) } } })
+    const calls = f.transport.mock.calls.length
+    await f.payload.jobs.runByID({ id: jobID, req: await f.request('manager'), overrideAccess: true, silent: true })
+    expect(f.transport).toHaveBeenCalledTimes(calls)
+    expect(await f.payload.findByID({ collection: 'seo-runs', id: run.id })).toMatchObject({ actor: { collection: 'users', userID: String(limited.id) }, state: 'completed', progress: { total: 0, completed: 0, failed: 0 } })
+  })
+  test('a manager draining a queue-only actor job cannot lend generation authority', async () => {
+    const post = await f.post()
+    const queued = await f.payload.jobs.queue({ task: 'nim-seo-generate-proposal', input: { collection: 'posts', sourceID: String(post.id), locale: 'fr' }, req: await f.request('queue-only'), overrideAccess: false })
+    const find = vi.spyOn(f.payload, 'findByID')
+    const calls = f.transport.mock.calls.length
+    await f.payload.jobs.runByID({ id: queued.id, req: await f.request('manager'), overrideAccess: true, silent: true })
+    expect(f.transport).toHaveBeenCalledTimes(calls)
+    expect(find.mock.calls.filter(([args]) => args.collection === 'posts')).toHaveLength(0)
+    find.mockRestore()
+    expect((await f.payload.find({ collection: 'seo-proposals', where: { sourceID: { equals: String(post.id) } } })).totalDocs).toBe(0)
+  })
   test('single generation task enforces authorization before reads and creates only proposals', async () => {
     const post = await f.post()
     const before = await f.payload.findByID({ collection: 'posts', id: post.id, locale: 'en', draft: true, depth: 0 })
@@ -67,10 +106,47 @@ describe('Payload jobs create proposals without application', () => {
     await f.payload.jobs.runByID({ id: denied.id, overrideAccess: true, silent: true })
     expect((await f.payload.findByID({ collection: 'payload-jobs', id: denied.id })).hasError).toBe(true)
     expect(f.transport).toHaveBeenCalledTimes(calls)
-    const allowed = await f.payload.jobs.queue({ task: 'nim-seo-generate-proposal', input: { collection: 'posts', sourceID: String(post.id), locale: 'en' }, overrideAccess: true })
-    await f.payload.jobs.runByID({ id: allowed.id, req: await f.request('generator'), overrideAccess: true, silent: true })
-    expect((await f.payload.find({ collection: 'seo-proposals', where: { sourceID: { equals: String(post.id) } } })).docs).toEqual([expect.objectContaining({ state: 'draft', locale: 'en' })])
+    const allowed = await queueGenerateProposal(f.options, await f.request('generator'), { collection: 'posts', sourceID: String(post.id), locale: 'en' })
+    await f.payload.jobs.runByID({ id: allowed.jobID, req: await f.request('manager'), overrideAccess: true, silent: true })
+    expect((await f.payload.find({ collection: 'seo-proposals', where: { sourceID: { equals: String(post.id) } } })).docs).toEqual([expect.objectContaining({ state: 'draft', locale: 'en', actor: { collection: 'users', userID: String(f.users.generator.id) } })])
     expect(await f.payload.findByID({ collection: 'posts', id: post.id, locale: 'en', draft: true, depth: 0 })).toEqual(before)
+  })
+  test('standalone jobs have immutable source scope and reject a borrowed scheduling record', async () => {
+    const original = await f.post()
+    const other = await f.post()
+    const scheduled = await queueGenerateProposal(f.options, await f.request('generator'), { collection: 'posts', sourceID: original.id, locale: 'fr' })
+    const changed = await f.payload.update({ collection: 'seo-runs', id: scheduled.run.id, req: await f.request('manager'), overrideAccess: false, data: { actor: { collection: 'users', userID: String(f.users.manager.id) }, kind: 'batch', document: { collection: 'posts', sourceID: other.id, locale: 'en' } } })
+    expect(changed).toMatchObject({ kind: 'document', actor: { collection: 'users', userID: String(f.users.generator.id) }, document: { collection: 'posts', sourceID: original.id, locale: 'fr' } })
+    const borrowed = await f.payload.jobs.queue({ task: 'nim-seo-generate-proposal', input: { runID: String(scheduled.run.id) }, req: await f.request('queue-only'), overrideAccess: false })
+    const calls = f.transport.mock.calls.length
+    await f.payload.jobs.runByID({ id: borrowed.id, req: await f.request('manager'), overrideAccess: true, silent: true })
+    expect(f.transport).toHaveBeenCalledTimes(calls)
+    expect((await f.payload.findByID({ collection: 'seo-runs', id: scheduled.run.id })).state).toBe('queued')
+    await f.payload.jobs.runByID({ id: scheduled.jobID, overrideAccess: true, silent: true })
+    expect((await f.payload.find({ collection: 'seo-proposals', where: { run: { equals: scheduled.run.id } } })).docs).toEqual([expect.objectContaining({ sourceID: String(original.id), locale: 'fr', actor: { collection: 'users', userID: String(f.users.generator.id) } })])
+  })
+  test('queue-only actors cannot mint authorized standalone scheduling records', async () => {
+    const create = vi.spyOn(f.payload, 'create')
+    try {
+      await expect(queueGenerateProposal(f.options, await f.request('queue-only'), { collection: 'posts', sourceID: 1, locale: 'fr' })).rejects.toThrow(/permission/)
+      expect(create).not.toHaveBeenCalled()
+    } finally { create.mockRestore() }
+  })
+  test('revoked standalone scheduling permission cannot be replaced by a manager queue runner', async () => {
+    const post = await f.post()
+    const scheduled = await queueGenerateProposal(f.options, await f.request('generator'), { collection: 'posts', sourceID: post.id, locale: 'fr' })
+    await f.payload.update({ collection: 'users', id: f.users.generator.id, data: { role: 'viewer' } })
+    const find = vi.spyOn(f.payload, 'findByID')
+    const calls = f.transport.mock.calls.length
+    try {
+      await f.payload.jobs.runByID({ id: scheduled.jobID, req: await f.request('manager'), overrideAccess: true, silent: true })
+      expect(f.transport).toHaveBeenCalledTimes(calls)
+      expect(find.mock.calls.filter(([args]) => args.collection === 'posts')).toHaveLength(0)
+      expect(await f.payload.findByID({ collection: 'seo-runs', id: scheduled.run.id })).toMatchObject({ state: 'failed', errors: [expect.objectContaining({ code: 'permission_denied' })] })
+    } finally {
+      find.mockRestore()
+      await f.payload.update({ collection: 'users', id: f.users.generator.id, data: { role: 'generator' } })
+    }
   })
   test('rechecks current manager permission before reading any source content', async () => {
     const post = await f.post()

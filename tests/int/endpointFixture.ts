@@ -23,15 +23,15 @@ export const fixture = async (bulk = true) => {
     email: () => ({ name: 'test', defaultFromAddress: 'test@example.test', defaultFromName: 'Test', sendEmail: async () => undefined }),
     db: sqliteAdapter({ client: { url: `file:${path.join(directory, 'test.db')}` }, transactionOptions: {} }),
     localization: { locales: ['fr', 'en'], defaultLocale: 'fr', fallback: false },
-    jobs: { access: { queue: hasRole('manager'), run: () => false }, tasks: [{ slug: 'host-task', handler: async () => ({ output: {} }) }] },
+    jobs: { access: { queue: hasRole('manager', 'generator', 'queue-only'), run: () => false }, tasks: [{ slug: 'host-task', handler: async () => ({ output: {} }) }] },
     collections: [
-      { slug: 'users', auth: true, fields: [{ name: 'role', type: 'text' }] },
+      { slug: 'users', auth: true, fields: [{ name: 'role', type: 'text' }, { name: 'scope', type: 'text' }] },
       { slug: 'media', fields: [{ name: 'alt', type: 'text', localized: true }] },
-      { slug: 'posts', versions: { drafts: true }, access: { read: ({ req }) => Boolean(req.user) && { title: { not_equals: 'Hidden' } } }, fields: [{ name: 'title', type: 'text', localized: true }, { name: 'content', type: 'textarea', localized: true }] },
+      { slug: 'posts', versions: { drafts: true }, access: { read: ({ req }) => Boolean(req.user) && { and: [{ title: { not_equals: 'Hidden' } }, ...(req.user?.scope === 'limited' ? [{ title: { not_equals: 'Restricted' } }] : [])] } }, fields: [{ name: 'title', type: 'text', localized: true }, { name: 'content', type: 'textarea', localized: true }] },
     ], plugins: [nimSeoPlugin(options)],
   }) })
   const users: Record<string, NonNullable<PayloadRequest['user']>> = {}
-  for (const role of ['viewer', 'editor', 'manager', 'generator', 'reviewer']) {
+  for (const role of ['viewer', 'editor', 'manager', 'generator', 'reviewer', 'queue-only']) {
     const doc = await payload.create({ collection: 'users', data: { email: `${role}@example.test`, password: 'fixture-password', role } })
     users[role] = { ...doc, collection: 'users' } as NonNullable<PayloadRequest['user']>
   }

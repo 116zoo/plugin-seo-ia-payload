@@ -1,4 +1,4 @@
-import type { Field, PayloadRequest } from 'payload'
+import type { GroupField, PayloadRequest } from 'payload'
 
 import type { ValidatedPluginOptions } from '../types.js'
 
@@ -15,7 +15,7 @@ export const allowSeo = (options: ValidatedPluginOptions, permissions: Permissio
   }
 
 /** Collection plus string ID supports hosts with multiple auth collections and numeric/UUID IDs. */
-export const actorField = (): Field => ({
+export const actorField = (): GroupField => ({
   name: 'actor', type: 'group', fields: [
     { name: 'collection', type: 'text' },
     { name: 'userID', type: 'text' },
