@@ -38,6 +38,7 @@ beforeAll(async () => {
       { slug: 'media', fields: [] },
       {
         slug: 'posts', versions: { drafts: true },
+        access: { read: ({ req }) => !(req.context.denyFrenchRead && req.locale === 'fr') },
         fields: [{ name: 'title', type: 'text', localized: true }, { name: 'content', type: 'textarea', localized: true }],
       },
     ], plugins: [nimSeoPlugin(options), (config) => {
@@ -110,5 +111,22 @@ describe('real localized selective application', () => {
     const draft = await payload.findByID({ collection: 'posts', id: post.id, locale: 'en', draft: true, depth: 0 })
     expect(draft.seo).toEqual(doc.seo)
     expect((await payload.findByID({ collection: 'seo-proposals', id: proposal.id })).state).toBe('draft')
+  })
+
+  test('keeps application atomic when another configured source locale denies read access', async () => {
+    const { req, post, proposal, doc } = await setup()
+    req.context.denyFrenchRead = true
+    req.context.failApplication = true
+    await expect(applyProposal({ options, req, proposal, locale: 'en', groups: ['meta'] })).rejects.toThrow('Application bookkeeping rejected')
+    const draft = await payload.findByID({ collection: 'posts', id: post.id, locale: 'en', draft: true, depth: 0 })
+    expect(draft.seo).toEqual(doc.seo)
+    expect((await payload.findByID({ collection: 'seo-proposals', id: proposal.id })).state).toBe('draft')
+  })
+
+  test('preserves the proposal request locale and fallback while enumerating source scopes', async () => {
+    const { req, proposal } = await setup()
+    await payload.findByID({ collection: 'seo-proposals', id: proposal.id, locale: 'fr', fallbackLocale: 'fr', req, overrideAccess: false })
+    expect(req.locale).toBe('fr')
+    expect(req.fallbackLocale).toBe('fr')
   })
 })
