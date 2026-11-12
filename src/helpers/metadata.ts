@@ -25,7 +25,8 @@ export interface SeoFields {
     ogDescription?: string | null
     twitterCard?: 'summary' | 'summary_large_image' | null
   } | null
-  schema?: Record<string, unknown>[] | null
+  /** Payload JSON fields generate a broad union; buildJsonLd narrows it at runtime. */
+  schema?: unknown
   citability?: {
     summary?: string | null
     sources?: string[] | null
@@ -92,5 +93,17 @@ export const buildMetadata = (seo: SeoFields): MetadataLike => {
 }
 
 /** Return independent approved JSON-LD graphs. Escape '<' when serializing into HTML. */
-export const buildJsonLd = (seo: SeoFields): Record<string, unknown>[] =>
-  structuredClone(seo.schema ?? [])
+export const buildJsonLd = (seo: SeoFields): Record<string, unknown>[] => {
+  const schema = seo.schema
+  if (!Array.isArray(schema) || !schema.every((graph): graph is Record<string, unknown> =>
+    graph !== null && typeof graph === 'object' && !Array.isArray(graph) &&
+    (Object.getPrototypeOf(graph) === Object.prototype || Object.getPrototypeOf(graph) === null))) {
+    return []
+  }
+  try {
+    return structuredClone(schema)
+  } catch {
+    // Non-JSON values from a custom adapter must not break public rendering.
+    return []
+  }
+}

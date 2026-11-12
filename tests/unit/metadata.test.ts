@@ -60,10 +60,16 @@ describe('approved localized frontend helpers', () => {
     expect(graphs).toEqual([expect.objectContaining({ '@context': 'https://schema.org' })])
     expect(graphs).not.toBe(frSeo.schema)
     graphs[0].headline = 'Changed'
-    expect(frSeo.schema?.[0].headline).toBe('Titre')
+    expect(frSeo.schema).toEqual([{ '@context': 'https://schema.org', '@type': 'Article', headline: 'Titre' }])
     expect(buildJsonLd({ ...frSeo, schema: [] })).toEqual([])
     expect(buildJsonLd({ schema: null })).toEqual([])
     expect(buildJsonLd({})).toEqual([])
+  })
+
+  test('rejects non-array and malformed Payload JSON field values', () => {
+    for (const schema of [null, true, 42, 'text', {}, { '@type': 'Article' }, [null], ['text'], [[]], [new Date()], [{ invalid: () => undefined }], [{ '@type': 'Article' }, 42]]) {
+      expect(buildJsonLd({ schema })).toEqual([])
+    }
   })
 
   test('never reads a proposal output or runs generation while rendering', () => {

@@ -249,7 +249,9 @@ export default async function PostPage({ params }) {
 
 Set `metadataBase` when media URLs are relative. Escape `<` whenever embedding
 JSON-LD in HTML, even for approved data; `buildJsonLd` returns cloned objects,
-not HTML. Plain metadata strings belong in framework metadata APIs, not raw HTML.
+not HTML. Payload's generated JSON-field union is accepted directly; non-array
+or malformed graph-array values produce no JSON-LD. The helper does not replace
+proposal validation or editorial approval. Plain metadata strings belong in framework metadata APIs, not raw HTML.
 Citability summaries, sources and claims are available in `doc.seo.citability`
 for host rendering; the plugin does not automatically add them to page content.
 
