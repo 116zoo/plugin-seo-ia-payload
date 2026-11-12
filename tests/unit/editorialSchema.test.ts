@@ -140,6 +140,42 @@ describe('editorial field registry', () => {
     }
   })
 
+  test('rejects FieldBase.hidden on fields and named ancestor groups', () => {
+    const direct = fixture({ include: ['title'] })
+    Object.assign(direct.config.collections![0].fields[0], { hidden: true })
+    expect(direct.resolve).toThrow(/title.*hidden/i)
+    const nested = fixture({ include: ['cta.label'] })
+    Object.assign(nested.config.collections![0].fields.find((field) => 'name' in field && field.name === 'cta')!, { hidden: true })
+    expect(nested.resolve).toThrow(/cta.*hidden/i)
+  })
+
+  test.each([{ hidden: true }, { virtual: true }, { virtual: 'other.title' }])('preserves named tab restrictions: %j', (restriction) => {
+    for (const path of ['details', 'details.subtitle']) {
+      const f = fixture({ include: [path] })
+      const tabs = f.config.collections![0].fields.find((field) => field.type === 'tabs')! as Extract<Field, { type: 'tabs' }>
+      Object.assign(tabs.tabs[1], restriction)
+      expect(f.resolve).toThrow(/details.*hidden|details.*virtual/i)
+    }
+  })
+
+  test.each(['tabs', 'unnamed tab', 'row', 'collapsible', 'unnamed group'])('propagates restrictions of %s without adding path segments', (wrapper) => {
+    for (const restriction of [{ hidden: true }, { admin: { hidden: true } }, { admin: { readOnly: true } }]) {
+      const f = fixture({ include: ['wrapped.heading'] })
+      const children: Field[] = [{ name: 'wrapped', type: 'group', fields: [{ name: 'heading', type: 'text', localized: true }] }]
+      let field: Field
+      if (wrapper === 'tabs') field = { type: 'tabs', tabs: [{ label: 'Visible', fields: children }], ...restriction }
+      else if (wrapper === 'unnamed tab') field = { type: 'tabs', tabs: [{ label: 'Restricted', fields: children, ...restriction }] }
+      else if (wrapper === 'row') field = { type: 'row', fields: children, ...restriction }
+      else if (wrapper === 'collapsible') field = { type: 'collapsible', label: 'Restricted', fields: children, ...restriction }
+      else field = { type: 'group', fields: children, ...restriction }
+      f.config.collections![0].fields.push(field)
+      expect(f.resolve).toThrow(/wrapped.heading.*hidden|wrapped.heading.*read-only/i)
+      // The rejection must be scoped to that wrapper, not a global schema veto.
+      f.options.collections.posts.editorialFields!.include = ['title']
+      expect(f.resolve().fields.map(({ path }) => path)).toEqual(['title'])
+    }
+  })
+
   test('resolves full polymorphic relation policy without assuming a single collection', () => {
     const f = fixture({ include: ['related'], relations: { related: { relationTo: ['tags', 'media'], allowCreate: false } } })
     f.config.collections![0].fields.push({ name: 'related', type: 'relationship', relationTo: ['media', 'tags'], localized: true })

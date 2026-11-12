@@ -1,4 +1,4 @@
-import type { Config, Field } from 'payload'
+import type { Config, Field, Tab } from 'payload'
 
 import type {
   EditorialField, EditorialFieldOptions, EditorialFieldType, EditorialRegistry,
@@ -39,34 +39,43 @@ const supportedTypes = new Set<EditorialFieldType>([
   'relationship', 'upload', 'group', 'array', 'blocks',
 ])
 
-type SchemaNode = Omit<EditorialField, 'type' | 'children'> & { type: Field['type']; children?: SchemaNode[] }
+type SchemaNode = Omit<EditorialField, 'type' | 'children'> & {
+  type: Field['type']; children?: SchemaNode[]; restricted: boolean
+}
+
+/** Layout-only wrappers still govern the eligibility of their descendants. */
+const isRestricted = (field: Field | Tab): boolean => Boolean(
+  ('hidden' in field && field.hidden)
+  || ('virtual' in field && field.virtual)
+  || (field.admin && (('hidden' in field.admin && field.admin.hidden)
+    || ('readOnly' in field.admin && field.admin.readOnly))),
+)
 
 /** Preserve schema namespaces, while discarding layout-only wrappers. */
 const schemaNodes = (
   fields: Field[], config: Config, prefix = '', ancestors: EditorialField['ancestors'] = [], depth = 0,
+  inheritedRestriction = false,
 ): SchemaNode[] => {
   if (depth > 30) return error(`${prefix}: editorial schema nesting is too deep or cyclic.`)
   const nodes: SchemaNode[] = []
   const pathFor = (name: string) => prefix ? `${prefix}.${name}` : name
   for (const field of fields) {
+    const restricted = inheritedRestriction || isRestricted(field)
     if (field.type === 'tabs') {
       for (const tab of field.tabs) {
+        const tabRestricted = restricted || isRestricted(tab)
         if ('name' in tab && tab.name) {
           const path = pathFor(tab.name)
-          const group: Field = {
-            name: tab.name, type: 'group', fields: tab.fields,
-            ...('localized' in tab ? { localized: tab.localized } : {}),
-            ...('admin' in tab ? { admin: tab.admin } : {}),
-          }
-          nodes.push({ path, type: 'group', field: group, ancestors,
-            children: schemaNodes(tab.fields, config, path, [...ancestors, { path, type: 'group' }], depth + 1) })
-        } else nodes.push(...schemaNodes(tab.fields, config, prefix, ancestors, depth + 1))
+          const group: Field = { ...tab, type: 'group' }
+          nodes.push({ path, type: 'group', field: group, ancestors, restricted: tabRestricted,
+            children: schemaNodes(tab.fields, config, path, [...ancestors, { path, type: 'group' }], depth + 1, tabRestricted) })
+        } else nodes.push(...schemaNodes(tab.fields, config, prefix, ancestors, depth + 1, tabRestricted))
       }
     } else if ('name' in field && field.name) {
       const path = pathFor(field.name)
-      const node: SchemaNode = { path, type: field.type, field, ancestors }
+      const node: SchemaNode = { path, type: field.type, field, ancestors, restricted }
       if (field.type === 'group' || field.type === 'array') {
-        node.children = schemaNodes(field.fields, config, path, [...ancestors, { path, type: field.type }], depth + 1)
+        node.children = schemaNodes(field.fields, config, path, [...ancestors, { path, type: field.type }], depth + 1, restricted)
       } else if (field.type === 'blocks') {
         node.children = []
         for (const reference of [...field.blocks, ...(field.blockReferences ?? [])]) {
@@ -74,20 +83,18 @@ const schemaNodes = (
           if (!block) error(`${path}: referenced block ${String(reference)} must exist in Payload config.blocks.`)
           node.children.push(...schemaNodes(block.fields, config, `${path}.${block.slug}`, [
             ...ancestors, { path, type: 'blocks', blockSlug: block.slug },
-          ], depth + 1))
+          ], depth + 1, restricted))
         }
       }
       nodes.push(node)
-    } else if ('fields' in field) nodes.push(...schemaNodes(field.fields, config, prefix, ancestors, depth + 1))
+    } else if ('fields' in field) nodes.push(...schemaNodes(field.fields, config, prefix, ancestors, depth + 1, restricted))
   }
   return nodes
 }
 const flatten = (nodes: SchemaNode[]): SchemaNode[] => nodes.flatMap((node) => [node, ...flatten(node.children ?? [])])
 
 const assertWritable = (collection: string, node: SchemaNode): void => {
-  const admin = node.field.admin
-  if ((admin && (('hidden' in admin && admin.hidden) || ('readOnly' in admin && admin.readOnly)))
-    || ('virtual' in node.field && node.field.virtual)) {
+  if (node.restricted) {
     error(`${collection}.${node.path}: hidden, read-only or virtual fields are not editorial fields.`)
   }
 }
@@ -141,7 +148,6 @@ export const resolveEditorialRegistry = (
     assertEditorialPath(collection, node.path)
     if (!supportedTypes.has(node.type as EditorialFieldType)) error(`${collection}.${node.path}: field type ${node.type} has no editorial adapter.`)
     assertWritable(collection, node)
-    for (const ancestor of node.ancestors) assertWritable(collection, lookup.get(ancestor.path)!)
     if (exclude.some((path) => containsPath(node.path, path))) {
       error(`${collection}.${node.path}: container overlaps an excluded child; include its safe child paths instead.`)
     }
@@ -170,9 +176,8 @@ export const resolveEditorialRegistry = (
       relation = { relationTo: typeof target === 'string' ? target : [...target], allowCreate: declaration.allowCreate }
       relations[node.path] = relation
     }
-    const { children, ...metadata } = node
-    return { ...metadata, type: node.type as EditorialFieldType,
-      ...(children ? { children: children.map(resolveNode) } : {}), ...(relation ? { relation } : {}) }
+    return { path: node.path, field: node.field, ancestors: node.ancestors, type: node.type as EditorialFieldType,
+      ...(node.children ? { children: node.children.map(resolveNode) } : {}), ...(relation ? { relation } : {}) }
   }
   const fields = selected.map((path) => {
     const node = lookup.get(path)!
