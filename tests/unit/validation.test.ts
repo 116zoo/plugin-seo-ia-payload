@@ -134,6 +134,28 @@ describe('parseProposalOutput', () => {
     expect(parseProposalOutput({ ...validOutput(), schema }, input).schema).toEqual(schema)
   })
 
+  test('allows supporting types only inside graph containers or nested entities', () => {
+    for (const type of ['Person', 'ImageObject', 'Thing', 'ListItem', 'Question', 'Answer', 'PostalAddress', 'ContactPoint']) {
+      const node = { '@type': type, name: 'Supporting entity' }
+      expect(() => parseProposalOutput({ ...validOutput(), schema: [node] }, input)).toThrow(/schema/)
+      expect(parseProposalOutput({ ...validOutput(), schema: [{ '@graph': [node] }] }, input).schema).toEqual([
+        { '@context': 'https://schema.org', '@graph': [node] },
+      ])
+    }
+  })
+
+  test.each([
+    { '@type': 'Product', name: 'Unsupported entity' },
+    { '@type': ['Person', 'Product'] },
+    { '@type': 'Person', url: 'javascript:alert(1)' },
+    { '@type': 'ImageObject', contentUrl: 'https://user:secret@site.test/photo.jpg' },
+    { '@context': 'https://foreign.test', '@type': 'Thing' },
+    { '@type': 'Thing', name: '<script>unsafe</script>' },
+    { name: 'Missing type' },
+  ])('rejects unsupported or unsafe supporting graph members (%j)', (node) => {
+    expect(() => parseProposalOutput({ ...validOutput(), schema: [{ '@graph': [node] }] }, input)).toThrow(/schema/)
+  })
+
   test('omits canonical and page URL-required schema without inventing a public URL', () => {
     const schema = [
       { '@type': 'Article', url: 'https://invented.test/article' },

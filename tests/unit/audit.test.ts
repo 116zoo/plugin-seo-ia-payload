@@ -1,6 +1,9 @@
 import { describe, expect, test } from 'vitest'
 
 import { auditSeo } from '../../src/services/audit.js'
+import { parseEditorialProposal } from '../../src/services/editorialValidation.js'
+import { buildAppliedGraph } from '../../src/services/graph.js'
+import type { EditorialRegistry } from '../../src/types.js'
 
 const approved = {
   meta: { title: 'Titre approuvé', description: 'Description approuvée', canonical: 'https://site.test/fr/article' },
@@ -34,6 +37,37 @@ describe('auditSeo', () => {
       status: { completeness: 'incomplete', warnings: ['Old warning'] },
     }
     expect(auditSeo({ seo }, 'fr')).toMatchObject({ score: 100, completeness: 'complete', missing: [], invalid: [] })
+  })
+
+  test('audits an applied editorial graph with supporting Schema.org nodes', () => {
+    const registry: EditorialRegistry = { collection: 'posts', exclude: ['content'], relations: {}, fields: [
+      { path: 'title', type: 'text', field: { name: 'title', type: 'text', localized: true }, ancestors: [] },
+    ] }
+    const sourceURL = 'https://site.test/fr/article'
+    const articleID = `${sourceURL}#article`
+    const personID = 'https://site.test/authors/7'
+    const imageID = 'https://site.test/media/7'
+    const thingID = 'https://site.test/topics/art'
+    const proposal = parseEditorialProposal({
+      locale: 'fr', patches: [{ path: 'title', operation: 'set', value: 'Titre approuvé' }], relatedDrafts: [],
+      semanticGraph: { '@graph': [
+        { '@id': articleID, '@type': 'Article', headline: 'Titre approuvé', author: { '@id': personID }, image: { '@id': imageID }, about: { '@id': thingID } },
+        { '@id': personID, '@type': 'Person', name: 'Auteur' },
+        { '@id': imageID, '@type': 'ImageObject', contentUrl: 'https://site.test/photo.jpg' },
+        { '@id': thingID, '@type': 'Thing', name: 'Art' },
+      ] },
+      graphBindings: [
+        { path: 'title', nodeId: articleID, properties: ['headline', 'author', 'image', 'about'] },
+        { path: 'title', nodeId: personID, properties: ['name'] },
+        { path: 'title', nodeId: imageID, properties: ['contentUrl'] },
+        { path: 'title', nodeId: thingID, properties: ['name'] },
+      ],
+    }, registry, 'fr', undefined, sourceURL)
+    const graph = buildAppliedGraph({ proposal, selectedPatches: ['title'], selectedDrafts: [], sourceURL, registry })
+    expect(graph['@graph']).toHaveLength(4)
+    expect(auditSeo({ seo: { ...approved, schema: [graph] } }, 'fr')).toMatchObject({
+      score: 100, completeness: 'complete', missing: [], invalid: [],
+    })
   })
 
   test('never falls back to another locale and gives absent approved SEO a zero score', () => {

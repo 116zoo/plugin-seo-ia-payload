@@ -45,7 +45,7 @@ const schemaGraph = z.custom<Record<string, unknown>>((value) => value !== null 
   const ancestors = new Set<object>()
   let nodes = 0
   const invalid = () => ctx.addIssue({ code: 'custom', message: 'Unsafe or unsupported JSON-LD.' })
-  const visit = (value: unknown, depth: number, key?: string, root = false): boolean => {
+  const visit = (value: unknown, depth: number, key?: string, root = false, graphMember = false): boolean => {
     nodes += 1
     if (depth > 32 || nodes > 5000) return false
     if (key && urlFields.has(key) && typeof value !== 'string') {
@@ -55,7 +55,7 @@ const schemaGraph = z.custom<Record<string, unknown>>((value) => value !== null 
     if (typeof value === 'string') {
       if (/[<>\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(value)) return false
       if (key === '@context') return value === 'https://schema.org'
-      if (key === '@type') return (root ? rootTypes : nestedTypes).has(value)
+      if (key === '@type') return (root && !graphMember ? rootTypes : nestedTypes).has(value)
       return !(key && urlFields.has(key)) || isPublicURL(value)
     }
     if (typeof value === 'number') return Number.isFinite(value)
@@ -64,22 +64,24 @@ const schemaGraph = z.custom<Record<string, unknown>>((value) => value !== null 
     ancestors.add(value)
     let valid: boolean
     if (Array.isArray(value)) {
-      valid = value.every((entry) => visit(entry, depth + 1, key, root))
+      valid = value.every((entry) => visit(entry, depth + 1, key, root, graphMember))
     } else {
       if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) return false
       const record = value as Record<string, unknown>
       if (root && record['@type'] === undefined && (!Array.isArray(record['@graph']) || record['@graph'].length === 0)) return false
       if (record['@type'] !== undefined) {
         const types = Array.isArray(record['@type']) ? record['@type'] : [record['@type']]
-        if (!types.length || !types.every((type) => typeof type === 'string' && (root ? rootTypes : nestedTypes).has(type))) return false
+        if (!types.length || !types.every((type) => typeof type === 'string' && (root && !graphMember ? rootTypes : nestedTypes).has(type))) return false
       }
       if (record['@context'] !== undefined && record['@context'] !== 'https://schema.org') return false
       valid = Object.entries(record).every(([property, entry]) => {
         if (forbiddenKeys.has(property) || (property.startsWith('@') && !jsonLdKeywords.has(property))) return false
         if (property === '@graph') {
-          return Array.isArray(entry) && entry.every((node) => node !== null && typeof node === 'object' && !Array.isArray(node) && visit(node, depth + 1, undefined, true))
+          // A graph can contain supporting entities (Person, ImageObject, Thing),
+          // while standalone schema documents retain the stricter root types.
+          return Array.isArray(entry) && entry.every((node) => node !== null && typeof node === 'object' && !Array.isArray(node) && visit(node, depth + 1, undefined, true, true))
         }
-        return visit(entry, depth + 1, property, property === '@type' && root)
+        return visit(entry, depth + 1, property, property === '@type' && root, graphMember)
       })
     }
     ancestors.delete(value)
