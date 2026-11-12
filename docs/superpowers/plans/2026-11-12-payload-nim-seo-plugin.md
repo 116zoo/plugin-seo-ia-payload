@@ -14,6 +14,7 @@
 
 - Support Payload CMS v3 only; package as a portable TypeScript/NPM plugin.
 - Require Payload localization and treat `fr` and `en` as independent locales; never translate or copy SEO between them.
+- Require every configured source-content field used by the plugin to be localized independently for `fr` and `en`; generation uses the active localized source only.
 - Call NIM only on the server; NIM URL, API key and model must never reach browser bundles or logs.
 - Generate proposals only; batch processing and single-document generation must never mutate approved SEO fields.
 - Require explicit editor action to apply a proposal, including a partial selection of fields.
@@ -459,3 +460,17 @@ git commit -m "docs: document Payload NIM SEO plugin integration"
 - **Type consistency:** `NimSeoPluginOptions → ValidatedPluginOptions → GenerationInput → SeoProposalPayload → SeoProposal → ApplyProposalArgs` is created in Tasks 1–6 and consumed by later tasks using the same names.
 - **Review focus:** The five highest-risk failure modes appear in Tasks 2, 4, 5 and 6 with direct tests.
 - **Proportion:** The plan defines boundaries, signatures, test assertions and verification only; it does not prescribe component bodies or prompt text beyond the approved constraints.
+
+### Task 10: Enforce bilingual source-content configuration
+
+**Files:**
+- Modify: `src/types.ts`, `src/plugin.ts`, `tests/unit/plugin-options.test.ts`, `README.md`
+
+**Interfaces:**
+- Extend `CollectionSeoOptions` with `localizedSourceFields: readonly string[]`.
+- `validatePluginOptions(options, config)` rejects a targeted collection unless every named source field exists and has `localized: true` in Payload’s field configuration.
+
+- [ ] Write failing validation tests for an unlocalized `title` or `content` field and a passing independent `fr`/`en` source configuration.
+- [ ] Implement recursive field lookup and startup diagnostics that name the collection and field; keep `extractContent` as the project-specific content reader.
+- [ ] Add README configuration guidance and run focused tests, full release checks and typecheck.
+- [ ] Commit: `feat: require localized source content fields`

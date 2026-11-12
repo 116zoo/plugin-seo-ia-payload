@@ -27,6 +27,7 @@ Créer un plugin TypeScript réutilisable pour Payload CMS v3 qui aide les édit
 - NVIDIA NIM est appelé depuis le serveur via son API compatible OpenAI, avec URL, modèle et secret configurés côté serveur.
 - Toutes les sorties sont des propositions revues et appliquées explicitement par un éditeur autorisé.
 - Le français et l’anglais sont indépendants : génération sur la locale ouverte, aucune copie ni traduction implicite.
+- Les contenus source eux-mêmes (titre, corps/blocs et métadonnées éditoriales configurées) doivent être localisés indépendamment en français et en anglais dans Payload ; le plugin ne génère qu’à partir de la version active.
 - Les images sont choisies dans la médiathèque Payload ; le plugin propose les attributs SEO de l’image et les dimensions recommandées.
 
 ## Approches considérées
