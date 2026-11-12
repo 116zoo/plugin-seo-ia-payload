@@ -15,7 +15,7 @@ let databaseDir: string
 let user: NonNullable<PayloadRequest['user']>
 const allowed = ({ req }: { req: PayloadRequest }) => Boolean(req.user)
 const options: ValidatedPluginOptions = {
-  collections: { posts: { titleField: 'title', mediaCollection: 'media', extractContent: ({ doc }) => String(doc.content), resolveURL: ({ locale }) => `https://site.test/${locale}/post` } },
+  collections: { posts: { titleField: 'title', localizedSourceFields: ['title', 'content'], mediaCollection: 'media', extractContent: ({ doc }) => String(doc.content), resolveURL: ({ locale }) => `https://site.test/${locale}/post` } },
   locales: ['fr', 'en'], bulk: false,
   nim: { baseURL: 'https://nim.test/v1', apiKey: 'test-only-key', model: 'fixture' },
   site: { defaultLocale: 'fr', organization: { name: 'Site', url: 'https://site.test' } },

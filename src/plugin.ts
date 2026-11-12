@@ -1,4 +1,4 @@
-import type { Config, Plugin } from 'payload'
+import type { Config, Field, Plugin } from 'payload'
 
 import { buildProposalsCollection } from './collections/proposals.js'
 import { buildRunsCollection } from './collections/runs.js'
@@ -17,6 +17,47 @@ const configurationError = (message: string): Error =>
 
 const isNonEmptyString = (value: unknown): value is string =>
   typeof value === 'string' && value.trim().length > 0
+
+/** Resolve configuration paths, retaining namespaces but ignoring layout-only wrappers. */
+const findSourceField = (
+  fields: Field[],
+  path: readonly string[],
+  config: Config,
+): { localized?: boolean } | undefined => {
+  for (const field of fields) {
+    if (field.type === 'tabs') {
+      for (const tab of field.tabs) {
+        const named = 'name' in tab && Boolean(tab.name)
+        if (named && tab.name !== path[0]) continue
+        if (named && path.length === 1) return tab
+        const match = findSourceField(tab.fields, named ? path.slice(1) : path, config)
+        if (match) return match
+      }
+    } else if ('name' in field && field.name) {
+      if (field.name !== path[0]) continue
+      if (path.length === 1) return 'localized' in field ? field : {}
+      if ('fields' in field) {
+        const match = findSourceField(field.fields, path.slice(1), config)
+        if (match) return match
+      }
+      if (field.type === 'blocks') {
+        // Block slugs disambiguate fields with the same name in different variants.
+        for (const reference of [...field.blocks, ...(field.blockReferences ?? [])]) {
+          const block = typeof reference === 'string'
+            ? config.blocks?.find(({ slug }) => slug === reference)
+            : reference
+          if (block?.slug !== path[1]) continue
+          const match = findSourceField(block.fields, path.slice(2), config)
+          if (match) return match
+        }
+      }
+    } else if ('fields' in field) {
+      const match = findSourceField(field.fields, path, config)
+      if (match) return match
+    }
+  }
+  return undefined
+}
 
 /** Validate the unsanitized host config before Payload initializes the plugin. */
 export const validatePluginOptions = (
@@ -58,6 +99,22 @@ export const validatePluginOptions = (
     for (const field of ['extractContent', 'resolveURL'] as const) {
       if (typeof collection?.[field] !== 'function') {
         throw configurationError(`${slug}.${field} must be a function.`)
+      }
+    }
+    if (!Array.isArray(collection.localizedSourceFields) || collection.localizedSourceFields.length === 0
+      || !collection.localizedSourceFields.every((field) => isNonEmptyString(field) && field.split('.').every(isNonEmptyString))) {
+      throw configurationError(`${slug}.localizedSourceFields must be a non-empty array of source field paths.`)
+    }
+    if (!collection.localizedSourceFields.includes(collection.titleField)) {
+      throw configurationError(`${slug}.${collection.titleField}: titleField must be included in localizedSourceFields.`)
+    }
+    for (const path of collection.localizedSourceFields) {
+      const field = findSourceField(hostCollection.fields, path.split('.'), config)
+      if (!field) {
+        throw configurationError(`${slug}.${path}: declared source field must exist in the target collection.`)
+      }
+      if (field.localized !== true) {
+        throw configurationError(`${slug}.${path}: source field must explicitly set localized: true for independent locale content.`)
       }
     }
     if (!hostCollections.has(collection.mediaCollection)) {

@@ -5,7 +5,7 @@ import { nimSeoPlugin } from '../../src/index.js'
 const validOptions = {
   collections: {
     posts: {
-      titleField: 'title',
+      titleField: 'title', localizedSourceFields: ['title', 'slug', 'content'],
       extractContent: ({ doc }: { doc: Record<string, unknown> }) => String(doc.content ?? ''),
       resolveURL: ({ doc, locale }: { doc: Record<string, unknown>; locale: string }) =>
         `https://example.com/${locale}/posts/${String(doc.slug)}`,

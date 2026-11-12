@@ -47,7 +47,7 @@ beforeAll(async () => {
       plugins: [nimSeoPlugin({
         collections: {
           posts: {
-            titleField: 'title', mediaCollection: 'media',
+            titleField: 'title', localizedSourceFields: ['title', 'slug', 'content'], mediaCollection: 'media',
             extractContent: ({ doc }) => String(doc.content ?? ''),
             resolveURL: ({ doc, locale }) => `https://example.test/${locale}/${String(doc.slug)}`,
           },
@@ -94,8 +94,8 @@ describe('localized SEO models', () => {
       citability: { summary: 'Résumé FR', sources: ['https://example.test/source'], claims: ['Affirmation'] },
       status: { lastValidatedAt: '2026-11-12T00:00:00.000Z', completeness: 'complete', warnings: ['Review image'] },
     }
-    const post = await payload.create({ collection: 'posts', locale: 'fr', data: { title: 'Bonjour', slug: 'bonjour', seo } })
-    await payload.update({ collection: 'posts', id: post.id, locale: 'en', data: { title: 'Hello', slug: 'hello', seo: { meta: { title: 'Title EN' }, citability: { summary: 'Summary EN' } } } })
+    const post = await payload.create({ collection: 'posts', locale: 'fr', data: { title: 'Bonjour', slug: 'bonjour', content: 'Contenu français indépendant.', seo } })
+    await payload.update({ collection: 'posts', id: post.id, locale: 'en', data: { title: 'Hello', slug: 'hello', content: 'Independent English content.', seo: { meta: { title: 'Title EN' }, citability: { summary: 'Summary EN' } } } })
     const french = await payload.findByID({ collection: 'posts', id: post.id, locale: 'fr', fallbackLocale: false, depth: 0 })
     const english = await payload.findByID({ collection: 'posts', id: post.id, locale: 'en', fallbackLocale: false, depth: 0 })
     expect(french.seo).toMatchObject(seo)
@@ -103,6 +103,9 @@ describe('localized SEO models', () => {
     expect(english.seo.social?.image).not.toBe(media.id)
     expect(english.seo.schema).not.toEqual(seo.schema)
     expect(french.title).toBe('Bonjour')
+    expect(french.content).toBe('Contenu français indépendant.')
+    expect(english.title).toBe('Hello')
+    expect(english.content).toBe('Independent English content.')
   })
 
   test('enforces the 2,000-character summary boundary on server create and update', async () => {

@@ -3,6 +3,8 @@ import type { PayloadRequest } from 'payload'
 /** The host owns content extraction and localized public routing. */
 export interface CollectionSeoOptions {
   titleField: string
+  /** All translatable source fields read by the adapters, including titleField. */
+  localizedSourceFields: readonly string[]
   extractContent: (args: {
     doc: Record<string, unknown>
     locale: string

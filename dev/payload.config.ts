@@ -54,6 +54,7 @@ export default buildConfig({
       collections: {
         posts: {
           titleField: 'title',
+          localizedSourceFields: ['title', 'slug', 'content'],
           extractContent: ({ doc }) => String(doc.content ?? '').slice(0, 10_000),
           resolveURL: ({ doc, locale }) =>
             typeof doc.slug === 'string'

@@ -6,7 +6,7 @@ import type { ValidatedPluginOptions } from '../../src/types.js'
 const options: ValidatedPluginOptions = {
   collections: {
     posts: {
-      titleField: 'title', mediaCollection: 'media',
+      titleField: 'title', localizedSourceFields: ['title', 'content'], mediaCollection: 'media',
       extractContent: async ({ doc, locale }) => (doc.content as Record<string, string>)[locale] ?? '',
       resolveURL: async ({ doc, locale }) => {
         const slug = (doc.slug as Record<string, string>)[locale]

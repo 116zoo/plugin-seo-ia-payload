@@ -8,6 +8,7 @@ const makeOptions = (): NimSeoPluginOptions => ({
   collections: {
     posts: {
       titleField: 'title',
+      localizedSourceFields: ['title', 'slug', 'content'],
       extractContent: ({ doc }) => String(doc.content ?? ''),
       resolveURL: ({ doc, locale }) => `https://example.test/${locale}/${String(doc.slug)}`,
       mediaCollection: 'media',
@@ -31,7 +32,11 @@ const makeConfig = (): Config => ({
   db: {} as Config['db'],
   secret: 'fixture-secret',
   collections: [
-    { slug: 'posts', fields: [{ name: 'title', type: 'text', localized: true }] },
+    { slug: 'posts', fields: [
+      { name: 'title', type: 'text', localized: true },
+      { name: 'slug', type: 'text', localized: true },
+      { name: 'content', type: 'textarea', localized: true },
+    ] },
     { slug: 'media', upload: true, fields: [] },
   ],
   localization: { locales: ['fr', 'en'], defaultLocale: 'fr' },
@@ -39,9 +44,88 @@ const makeConfig = (): Config => ({
 })
 
 describe('validatePluginOptions', () => {
+  test.each(['title', 'content'].flatMap((name) => [undefined, false].map((localized) => ({ name, localized }))))(
+    'rejects a shared source $name (localized=$localized) even when SEO/locales are bilingual', ({ name, localized }) => {
+      const config = makeConfig()
+      const field = config.collections![0].fields.find((field) => 'name' in field && field.name === name)!
+      if ('localized' in field) field.localized = localized
+      expect(() => validatePluginOptions(makeOptions(), config)).toThrow(new RegExp(`posts.*${name}.*localized`, 'i'))
+    },
+  )
+
+  test.each([undefined, null, [], 'content', [''], ['  '], [123], ['title', 'article..body']].map((fields) => ({ fields })))(
+    'requires a nonempty declaration of source field paths ($fields)', ({ fields }) => {
+      const options = makeOptions()
+      ;(options.collections.posts as unknown as Record<string, unknown>).localizedSourceFields = fields
+      expect(() => validatePluginOptions(options, makeConfig())).toThrow(/posts.*localizedSourceFields/i)
+    },
+  )
+
+  test('requires the source title in the localization declaration', () => {
+    const options = makeOptions()
+    options.collections.posts.localizedSourceFields = ['content']
+    expect(() => validatePluginOptions(options, makeConfig())).toThrow(/posts.*title.*localizedSourceFields/i)
+  })
+
+  test('names a declared source field absent from the targeted collection', () => {
+    const options = makeOptions()
+    options.collections.posts.localizedSourceFields = ['title', 'missing']
+    expect(() => validatePluginOptions(options, makeConfig())).toThrow(/posts.*missing.*exist/i)
+  })
+
+  test('resolves source paths through layout fields, named tabs, groups, arrays and block variants', () => {
+    const config = makeConfig()
+    config.collections![0].fields.push({ type: 'tabs', tabs: [
+      { label: 'Content', fields: [{ type: 'row', fields: [{ type: 'collapsible', label: 'Details', fields: [
+        { name: 'intro', type: 'textarea', localized: true },
+      ] }] }] },
+      { name: 'article', fields: [{ name: 'details', type: 'group', fields: [
+        { name: 'body', type: 'richText', localized: true },
+      ] }] },
+    ] }, {
+      name: 'sections', type: 'array', fields: [{ name: 'text', type: 'textarea', localized: true }],
+    }, {
+      name: 'layout', type: 'blocks', blocks: [{ slug: 'hero', fields: [
+        { name: 'text', type: 'textarea', localized: true },
+      ] }], blockReferences: ['shared'],
+    })
+    config.blocks = [{ slug: 'shared', fields: [{ name: 'text', type: 'textarea', localized: true }] }]
+    const options = makeOptions()
+    options.collections.posts.localizedSourceFields = ['title', 'content', 'intro', 'article.details.body', 'sections.text', 'layout.hero.text', 'layout.shared.text']
+    expect(validatePluginOptions(options, config).collections.posts.localizedSourceFields).toEqual(options.collections.posts.localizedSourceFields)
+    options.collections.posts.localizedSourceFields = ['title', 'article.details.missing']
+    expect(() => validatePluginOptions(options, config)).toThrow(/posts.*article.details.missing.*exist/i)
+  })
+
+  test('does not confuse equally named fields in different groups or block variants', () => {
+    const config = makeConfig()
+    config.collections![0].fields.push({ name: 'shared', type: 'group', fields: [
+      { name: 'content', type: 'textarea' },
+    ] }, { name: 'layout', type: 'blocks', blocks: [
+      { slug: 'translated', fields: [{ name: 'text', type: 'textarea', localized: true }] },
+      { slug: 'shared', fields: [{ name: 'text', type: 'textarea' }] },
+    ] })
+    const options = makeOptions()
+    for (const path of ['shared.content', 'layout.shared.text']) {
+      options.collections.posts.localizedSourceFields = ['title', path]
+      expect(() => validatePluginOptions(options, config)).toThrow(new RegExp(`posts.*${path}.*localized`, 'i'))
+    }
+  })
+
+  test('requires explicit localization on a declared field even inside a localized group', () => {
+    const config = makeConfig()
+    config.collections![0].fields.push({ name: 'article', type: 'group', localized: true, fields: [
+      { name: 'body', type: 'textarea' },
+    ] })
+    const options = makeOptions()
+    options.collections.posts.localizedSourceFields = ['title', 'article.body']
+    expect(() => validatePluginOptions(options, config)).toThrow(/posts.*article.body.*localized/i)
+  })
+
   test('retains independently configured locales and defaults bulk to false', () => {
     expect(validatePluginOptions(makeOptions(), makeConfig())).toMatchObject({
       locales: ['fr', 'en'],
+      collections: { posts: { localizedSourceFields: ['title', 'slug', 'content'] } },
       bulk: false,
     })
   })
@@ -232,7 +316,7 @@ describe('nimSeoPlugin', () => {
     const config = makeConfig()
     const options = makeOptions()
     options.collections.pages = { ...options.collections.posts, mediaCollection: 'page-media' }
-    config.collections!.push({ slug: 'pages', fields: [] }, { slug: 'page-media', fields: [] })
+    config.collections!.push({ slug: 'pages', fields: makeConfig().collections![0].fields }, { slug: 'page-media', fields: [] })
     const result = await nimSeoPlugin(options)(config)
     expect(result.collections?.find(({ slug }) => slug === 'pages')?.fields).toContainEqual(
       expect.objectContaining({ name: 'seo', fields: expect.arrayContaining([
@@ -259,7 +343,7 @@ describe('nimSeoPlugin', () => {
       expect(config.collections).toBe(originalCollections)
       expect(config.collections!.at(-1)).toBe(collision)
       expect(collision.fields).toBe(originalFields)
-      expect(config.collections![0].fields).toEqual([{ name: 'title', type: 'text', localized: true }])
+      expect(config.collections![0].fields).toEqual(makeConfig().collections![0].fields)
     },
   )
 

@@ -86,6 +86,7 @@ export default buildConfig({
     collections: {
       posts: {
         titleField: 'title',
+        localizedSourceFields: ['title', 'slug', 'content'],
         extractContent: ({ doc }) => String(doc.content ?? '').slice(0, 10_000),
         resolveURL: ({ doc, locale }) => typeof doc.slug === 'string'
           ? `https://example.com/${locale}/posts/${encodeURIComponent(doc.slug)}`
@@ -128,6 +129,24 @@ French and English. Configure both source content and SEO localization: mark the
 host title, body, slug and other translatable source fields `localized: true`.
 Plugin-added `seo` is a localized group. Register every plugin locale in Payload's
 `localization.locales`, with fallback disabled for explicit editorial workflows.
+
+Each collection must declare a nonempty `localizedSourceFields` array containing
+`titleField` and every translatable source field read by `extractContent` or
+`resolveURL`. Startup rejects missing fields or fields without their own
+`localized: true`, naming the collection and field in the diagnostic. Enabling
+FR/EN locales or localizing only the plugin's SEO group does not satisfy this
+requirement. The declaration checks the host schema, not whether translations
+have been written or whether an adapter reads undeclared fields.
+
+Use dot paths for nested groups, arrays and named tabs, such as
+`article.body` or `sections.text`; rows, collapsibles and unnamed tabs do not add
+a path segment. For block fields, include the block slug, for example
+`layout.hero.text`. Inline blocks and `config.blocks` references are supported.
+Each declared path must itself have `localized: true`; an explicitly localized
+parent group/array/block field may instead be declared when that whole value is
+the source read by your adapter. Declaring a child separately still requires
+localization on that child. These are configuration paths; they do not replace
+the project's content reader or add dot-path access to `titleField`.
 
 Generation loads the saved draft in exactly one requested locale with
 `fallbackLocale: false`; it does not translate missing source content. Save changes

@@ -12,7 +12,7 @@ export const fixture = async (bulk = true) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'nim-seo-endpoints-'))
   const hasRole = (...roles: string[]) => ({ req }: { req: PayloadRequest }) => roles.includes(String(req.user?.role))
   const options: ValidatedPluginOptions = {
-    collections: { posts: { titleField: 'title', mediaCollection: 'media', extractContent: ({ doc }) => String(doc.content ?? ''), resolveURL: ({ locale }) => `https://site.test/${locale}/post` } },
+    collections: { posts: { titleField: 'title', localizedSourceFields: ['title', 'content'], mediaCollection: 'media', extractContent: ({ doc }) => String(doc.content ?? ''), resolveURL: ({ locale }) => `https://site.test/${locale}/post` } },
     locales: ['fr', 'en'], bulk,
     nim: { baseURL: 'https://nim.test/v1', apiKey: 'fixture-key-do-not-leak', model: 'fixture' },
     site: { defaultLocale: 'fr', organization: { name: 'Fixture', url: 'https://site.test' } },
