@@ -65,7 +65,7 @@ export const editorialGenerationSpecification = ({ registry, registries, locale,
   visit(fields)
   return { locale, collection: registry.collection, fields, relatedCollections, ...(mediaCollection ? { selectedMediaCollection: mediaCollection } : {}), graph: {
     context: 'https://schema.org',
-    types: ['WebPage', 'Article', 'BlogPosting', 'BreadcrumbList', 'Organization', 'WebSite', 'FAQPage', 'Person', 'ImageObject', 'ListItem', 'Question', 'Answer', 'PostalAddress', 'ContactPoint', 'Thing'],
+    types: ['WebPage', 'Article', 'BlogPosting', 'BreadcrumbList', 'Organization', 'LocalBusiness', 'WebSite', 'FAQPage', 'Person', 'ImageObject', 'ListItem', 'Question', 'Answer', 'PostalAddress', 'ContactPoint', 'Thing'],
     properties: [...editorialGraphProperties],
   } }
 }

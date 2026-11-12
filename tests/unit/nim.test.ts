@@ -11,7 +11,7 @@ const options: ValidatedPluginOptions = {
   locales: ['fr', 'en'], bulk: false,
   editorialRegistries: {},
   nim: config,
-  site: { defaultLocale: 'fr', organization: { name: 'Site', url: 'https://site.test' } },
+  site: { defaultLocale: 'fr', organization: { name: 'Site', url: 'https://site.test', telephone: '+33123456789', address: { streetAddress: '1 rue Exemple', addressLocality: 'Paris', postalCode: '75001', addressCountry: 'FR' } } },
   permissions: { generate: () => true, apply: () => true, manage: () => false },
 }
 const makeInput = () => buildGenerationInput({
@@ -19,7 +19,7 @@ const makeInput = () => buildGenerationInput({
   doc: { id: 12, title: 'Title', content: 'English source', media: [{ id: 'unselected-media-id' }], seo: { meta: { title: 'approved-private-title' } } },
   selectedMedia: [{ id: 7, filename: 'photo.jpg', secret: 'private-media-field', related: { id: 'unselected-media-id' } }],
 })
-const output = () => ({ meta: { title: 'Proposed title', description: 'Description' }, social: { image: 7 }, schema: [], citability: { summary: 'Summary' } })
+const output = () => ({ meta: { title: 'Proposed title', description: 'Description' }, social: { image: 7, imageFilename: 'photo.jpg' }, schema: [], citability: { summary: 'Summary' } })
 const completion = (content: unknown = JSON.stringify(output()), finish_reason = 'stop') => ({ choices: [{ message: { role: 'assistant', content }, finish_reason }] })
 const reply = (body: unknown) => new Response(JSON.stringify(body), { status: 200 })
 const field = (path: string, type: 'text' | 'textarea'): EditorialField => ({ path, type, ancestors: [], field: {
@@ -45,8 +45,18 @@ describe('createNimClient', () => {
     expect(request).toMatchObject({ model: 'configured-model', stream: false, response_format: { type: 'json_object' } })
     expect(request.messages[0]).toMatchObject({ role: 'system', content: expect.stringContaining('2000') })
     expect(request.messages[0].content).toContain('schema')
-    expect(JSON.parse(request.messages[1].content)).toMatchObject({ locale: 'en', content: 'English source', selectedMedia: [{ id: 7, filename: 'photo.jpg' }] })
+    expect(JSON.parse(request.messages[1].content)).toMatchObject({ locale: 'en', content: 'English source', selectedMedia: [{ id: 7, filename: 'photo.jpg' }], site: { organization: { telephone: '+33123456789', address: { addressLocality: 'Paris' } } } })
     for (const excluded of ['private-fixture-key', 'unselected-media-id', 'private-media-field', 'approved-private-title']) expect(fetchMock.mock.calls[0][1].body).not.toContain(excluded)
+  })
+
+  test('instructs NIM to return connected NAP multi-schema graphs without inventing facts', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(reply(completion()))
+    vi.stubGlobal('fetch', fetchMock)
+    await createNimClient(config).generate(await makeInput())
+    const prompt = JSON.parse(fetchMock.mock.calls[0][1].body).messages[0].content as string
+    expect(prompt).toContain('trusted site.organization NAP facts')
+    expect(prompt).toContain('one coherent @graph')
+    expect(prompt).toContain('Never invent, normalize, or complete a missing NAP value')
   })
 
   test('supports a root NIM URL without duplicating the v1 prefix', async () => {

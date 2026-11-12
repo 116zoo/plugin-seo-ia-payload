@@ -67,8 +67,21 @@ export function SeoPanel({ locales, mediaCollection }: SeoPanelProps) {
           throw error
         }),
     ])
-    if (currentScope.current === scope && !signal?.aborted) setState({ scope, audit: audit.audit.locale === locale ? audit.audit : undefined, proposals: list.docs.filter(matches), media: media.docs })
-  }, [supported, canRead, id, collectionSlug, locale, api, mediaCollection, scope, matches])
+    if (currentScope.current === scope && !signal?.aborted) {
+      setState({ scope, audit: audit.audit.locale === locale ? audit.audit : undefined, proposals: list.docs.filter(matches), media: media.docs })
+      // Keep generation useful on first open: reuse the saved image when present,
+      // otherwise select the first accessible media and let the editor change it.
+      setSelectedMedia((previous) => {
+        if (previous.length || !media.docs.length) return previous
+        const savedImage = data?.seo && typeof data.seo === 'object' && 'social' in data.seo && data.seo.social && typeof data.seo.social === 'object'
+          ? (data.seo.social as Record<string, unknown>).image
+          : undefined
+        const savedImageID = savedImage && typeof savedImage === 'object' && 'id' in savedImage ? savedImage.id : savedImage
+        const preferred = media.docs.find((item) => savedImageID !== undefined && String(item.id) === String(savedImageID)) ?? media.docs[0]
+        return preferred ? [preferred.id] : previous
+      })
+    }
+  }, [supported, canRead, id, collectionSlug, locale, api, mediaCollection, scope, matches, data])
 
   useEffect(() => {
     const controller = new AbortController()
@@ -146,7 +159,7 @@ export function SeoPanel({ locales, mediaCollection }: SeoPanelProps) {
           <input type="checkbox" checked={selectedMedia.includes(media.id)} onChange={(event) => setSelectedMedia((previous) => event.target.checked ? [...previous, media.id] : previous.filter((id) => id !== media.id))} /> {media.filename ?? media.alt ?? String(media.id)}
         </label>) : <p>{copy.noMedia}</p>}
       </fieldset>
-      <p>{copy.mediaNotice}</p>
+      <p>{copy.mediaNotice} Le premier média accessible est présélectionné ; vous pouvez modifier ce choix.</p>
       <button type="button" disabled={busy || !saved} onClick={() => void perform('generate')}>{busy ? copy.generating : copy.generate}</button>
     </>}
     <button type="button" disabled={busy || id === undefined} onClick={() => void perform('refresh')}>{copy.refresh}</button>

@@ -107,6 +107,15 @@ export interface NimSeoPluginOptions {
     organization: {
       name: string
       url: string
+      /** Optional trusted NAP facts used for Organization/LocalBusiness JSON-LD. */
+      telephone?: string
+      address?: {
+        streetAddress?: string
+        addressLocality?: string
+        addressRegion?: string
+        postalCode?: string
+        addressCountry?: string
+      }
     }
   }
   permissions: {

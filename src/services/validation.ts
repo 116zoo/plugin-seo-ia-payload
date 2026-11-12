@@ -21,7 +21,7 @@ export class ProposalValidationError extends Error {
   }
 }
 
-const rootTypes = new Set(['WebPage', 'Article', 'BlogPosting', 'BreadcrumbList', 'Organization', 'WebSite', 'FAQPage'])
+const rootTypes = new Set(['WebPage', 'Article', 'BlogPosting', 'BreadcrumbList', 'Organization', 'LocalBusiness', 'WebSite', 'FAQPage'])
 const nestedTypes = new Set([...rootTypes, 'Person', 'ImageObject', 'ListItem', 'Question', 'Answer', 'PostalAddress', 'ContactPoint', 'Thing'])
 const pageTypes = new Set(['WebPage', 'Article', 'BlogPosting', 'BreadcrumbList', 'WebSite', 'FAQPage'])
 const urlFields = new Set(['@id', 'url', 'sameAs', 'image', 'logo', 'contentUrl', 'embedUrl', 'thumbnailUrl', 'mainEntityOfPage', 'isPartOf', 'license', 'discussionUrl', 'item', 'subjectOf', 'sdLicense'])
@@ -151,6 +151,24 @@ const diagnosticsFromIssues = (issues: z.core.$ZodIssue[]): ProposalValidationDi
     : issue.code === 'custom' ? issue.message : 'Invalid field value.',
 }))
 
+/** Complete image fields from editor-selected media when the model omits them. */
+const completeSelectedMedia = (value: unknown, selectedMedia: GenerationInput['selectedMedia']): unknown => {
+  if (!selectedMedia.length || !value || typeof value !== 'object' || Array.isArray(value)) return value
+  const proposal = value as Record<string, unknown>
+  if (!proposal.social || typeof proposal.social !== 'object' || Array.isArray(proposal.social)) return value
+
+  const social = { ...(proposal.social as Record<string, unknown>) }
+  const selected = selectedMedia.find((media) => media.id === social.image || String(media.id) === String(social.image)) ?? selectedMedia[0]
+  if (social.image === undefined) social.image = selected.id
+  else if (selectedMedia.some((media) => media.id === social.image || String(media.id) === String(social.image))) social.image = selected.id
+  if (social.imageAlt === undefined && selected.alt) social.imageAlt = selected.alt
+  if (social.imageFilename === undefined && selected.filename) social.imageFilename = selected.filename
+  if (social.imageCaption === undefined && selected.caption) social.imageCaption = selected.caption
+  if (social.recommendedWidth === undefined && selected.width) social.recommendedWidth = selected.width
+  if (social.recommendedHeight === undefined && selected.height) social.recommendedHeight = selected.height
+  return { ...proposal, social }
+}
+
 /** Validate the complete proposal before a caller can persist it or offer editorial review. */
 export const parseProposalOutput = (value: unknown, input: Pick<GenerationInput, 'url' | 'selectedMedia'>, editorial?: EditorialValidationContext): SeoProposalPayload => {
   let decoded: unknown = value
@@ -161,6 +179,22 @@ export const parseProposalOutput = (value: unknown, input: Pick<GenerationInput,
       throw new ProposalValidationError([{ code: 'invalid_json', message: 'Expected a JSON proposal object.', path: '' }])
     }
   }
+  // Some OpenAI-compatible models collapse a one-item string array into a
+  // scalar. Normalize that harmless shape before strict validation.
+  if (decoded && typeof decoded === 'object' && !Array.isArray(decoded)) {
+    const proposal = decoded as Record<string, unknown>
+    const citability = proposal.citability
+    const value = citability && typeof citability === 'object' && !Array.isArray(citability)
+      ? { ...(citability as Record<string, unknown>) }
+      : {}
+    if (typeof value.summary !== 'string') value.summary = ''
+    if (typeof value.claims === 'string') value.claims = [value.claims]
+    else if (value.claims !== undefined && (!Array.isArray(value.claims) || !value.claims.every((item) => typeof item === 'string'))) delete value.claims
+    if (typeof value.sources === 'string') value.sources = [value.sources]
+    else if (value.sources !== undefined && (!Array.isArray(value.sources) || !value.sources.every((item) => typeof item === 'string'))) delete value.sources
+    proposal.citability = value
+  }
+  decoded = completeSelectedMedia(decoded, input.selectedMedia)
   let editorialOutput: SeoProposalPayload['editorial']
   if (editorial && decoded && typeof decoded === 'object' && !Array.isArray(decoded) && Object.hasOwn(decoded, 'editorial')) {
     const { editorial: rawEditorial, ...seo } = decoded as Record<string, unknown>
@@ -170,7 +204,14 @@ export const parseProposalOutput = (value: unknown, input: Pick<GenerationInput,
     editorialOutput = parseEditorialProposal(rawEditorial, editorial.registry, editorial.locale, editorial.registries, input.url)
     decoded = seo
   }
-  const result = proposalSchema.safeParse(decoded)
+  let result = proposalSchema.safeParse(decoded)
+  // Schema.org is optional enrichment: discard only an unsafe schema graph so
+  // valid meta/social/citability proposals remain reviewable and applicable.
+  if (!result.success && result.error.issues.length > 0
+    && result.error.issues.every((issue) => issue.code === 'custom' && issue.path[0] === 'schema')
+    && decoded && typeof decoded === 'object' && !Array.isArray(decoded)) {
+    result = proposalSchema.safeParse({ ...(decoded as Record<string, unknown>), schema: [] })
+  }
   if (!result.success) throw new ProposalValidationError(diagnosticsFromIssues(result.error.issues))
   const output = result.data
   if (output.social.image !== undefined && !input.selectedMedia.some(({ id }) => id === output.social.image)) {
