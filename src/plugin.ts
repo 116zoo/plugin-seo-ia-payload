@@ -9,6 +9,7 @@ import { auditEndpoint } from './endpoints/audit.js'
 import { adminCapabilitiesEndpoint } from './endpoints/admin.js'
 import { generateProposalTask } from './jobs/generateProposal.js'
 import { runAuditTask } from './jobs/runAudit.js'
+import { resolveEditorialRegistry } from './services/editorialSchema.js'
 
 import type { NimSeoPluginOptions, ValidatedPluginOptions } from './types.js'
 
@@ -173,7 +174,10 @@ export const validatePluginOptions = (
     }
   }
 
-  return { ...options, bulk }
+  const editorialRegistries = Object.fromEntries(collections.map(([slug]) => [
+    slug, resolveEditorialRegistry(options, slug, config),
+  ]))
+  return { ...options, bulk, editorialRegistries }
 }
 
 /** Add SEO models without mutating the host's collection/config objects. */

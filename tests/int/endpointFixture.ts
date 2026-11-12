@@ -14,6 +14,7 @@ export const fixture = async (bulk = true) => {
   const options: ValidatedPluginOptions = {
     collections: { posts: { titleField: 'title', localizedSourceFields: ['title', 'content'], mediaCollection: 'media', extractContent: ({ doc }) => String(doc.content ?? ''), resolveURL: ({ locale }) => `https://site.test/${locale}/post` } },
     locales: ['fr', 'en'], bulk,
+    editorialRegistries: {},
     nim: { baseURL: 'https://nim.test/v1', apiKey: 'fixture-key-do-not-leak', model: 'fixture' },
     site: { defaultLocale: 'fr', organization: { name: 'Fixture', url: 'https://site.test' } },
     permissions: { generate: hasRole('editor', 'generator'), apply: hasRole('editor', 'reviewer'), manage: hasRole('manager') },

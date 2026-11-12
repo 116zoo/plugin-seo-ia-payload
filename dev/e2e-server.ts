@@ -9,12 +9,30 @@ const directory = await mkdtemp(path.join(os.tmpdir(), 'nim-seo-browser-'))
 const provider = createServer(async (req, res) => {
   let body = ''
   for await (const part of req) body += part
-  const input = JSON.parse(JSON.parse(body).messages.find((message: { role: string }) => message.role === 'user').content) as { locale: string }
+  const input = JSON.parse(JSON.parse(body).messages.find((message: { role: string }) => message.role === 'user').content) as { locale: string; title: string; url?: string }
   const french = input.locale === 'fr'
   const output = {
     meta: { title: french ? 'Proposition FR' : 'Proposal EN', description: french ? 'Description proposée en français.' : 'Proposed English description.' },
     social: { ogTitle: french ? 'Partage FR' : 'Share EN', ogDescription: 'Social preview', imageAlt: 'Example image', imageFilename: 'example.webp', imageCaption: 'Example caption', recommendedWidth: 1200, recommendedHeight: 630 },
     schema: [], citability: { summary: french ? 'Résumé proposé FR' : 'Proposed summary EN' },
+    ...(input.title.startsWith('Editorial fixture') ? { editorial: {
+      locale: input.locale,
+      patches: [
+        { path: 'title', operation: 'set', value: french ? 'Titre éditorial proposé FR' : 'Proposed editorial title EN' },
+        { path: 'excerpt', operation: 'set', value: french ? 'Chapô proposé FR' : 'Proposed English excerpt' },
+        { path: 'tags', operation: 'set', value: [{ localId: 'new-tag' }] },
+      ],
+      relatedDrafts: [{ collection: 'tags', localId: 'new-tag', locale: input.locale, fields: { name: french ? 'Art numérique' : 'Digital art' }, graphNodeId: 'draft:new-tag' }],
+      semanticGraph: { '@context': 'https://schema.org', '@graph': [
+        { '@id': input.url, '@type': 'Article', headline: french ? 'Titre éditorial proposé FR' : 'Proposed editorial title EN', description: french ? 'Chapô proposé FR' : 'Proposed English excerpt', about: { '@id': 'draft:new-tag' } },
+        { '@id': 'draft:new-tag', '@type': 'Thing', name: french ? 'Art numérique' : 'Digital art' },
+      ] },
+      graphBindings: [
+        { path: 'title', nodeId: input.url, properties: ['headline'] },
+        { path: 'excerpt', nodeId: input.url, properties: ['description'] },
+        { path: 'tags', nodeId: input.url, properties: ['about'] },
+      ],
+    } } : {}),
   }
   res.setHeader('Content-Type', 'application/json')
   res.end(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(output) } }] }))

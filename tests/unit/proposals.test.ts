@@ -9,6 +9,7 @@ import type { SeoProposalPayload, ValidatedPluginOptions } from '../../src/types
 const options: ValidatedPluginOptions = {
   collections: { posts: { titleField: 'title', localizedSourceFields: ['title', 'content'], mediaCollection: 'media', extractContent: ({ doc, locale }) => (doc.content as Record<string, string>)[locale], resolveURL: ({ locale }) => `https://site.test/${locale}/post` } },
   locales: ['fr', 'en'], bulk: false,
+  editorialRegistries: {},
   nim: { baseURL: 'https://nim.test/v1', apiKey: 'private-fixture-key', model: 'fixture' },
   site: { defaultLocale: 'fr', organization: { name: 'Site', url: 'https://site.test' } },
   permissions: { generate: () => true, apply: () => false, manage: () => false },
@@ -47,6 +48,28 @@ describe('createProposal', () => {
     delete args.client
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(output) }, finish_reason: 'stop' }] }))))
     expect(await createProposal(args)).toMatchObject({ state: 'draft', output })
+  })
+
+  test('requests and persists real editorial generation with the default transport and active locale only', async () => {
+    const { args, create } = setup()
+    delete args.client
+    const registry = { collection: 'posts', exclude: ['content'], relations: {}, fields: [{ path: 'excerpt', type: 'textarea' as const, ancestors: [], field: { name: 'excerpt', type: 'textarea' as const, localized: true } }] }
+    args.options = { ...options, collections: { posts: { ...options.collections.posts, editorialFields: { include: ['excerpt'] } } }, editorialRegistries: { posts: registry } }
+    args.doc.excerpt = { en: 'Current summary', fr: 'Résumé privé FR' }
+    const fetchMock = vi.fn(async (_url, init) => {
+      const request = JSON.parse(init.body)
+      const input = JSON.parse(request.messages[1].content)
+      expect(input.editorialSpecification.selectedMediaCollection).toBe('media')
+      const outputWithEditorial = { ...output, editorial: { locale: input.locale, patches: input.editorialSpecification.fields.map(({ path }: { path: string }) => ({ path, operation: 'set', value: 'Generated English excerpt' })), relatedDrafts: [],
+        semanticGraph: { '@context': 'https://schema.org', '@graph': [{ '@id': input.url, '@type': 'Article', description: 'Generated English excerpt' }] }, graphBindings: [{ path: 'excerpt', nodeId: input.url, properties: ['description'] }],
+      } }
+      return new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify(outputWithEditorial) }, finish_reason: 'stop' }] }))
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await createProposal(args)).toMatchObject({ state: 'draft', editorialSourceFingerprint: expect.any(String), output: { editorial: { locale: 'en', patches: [{ path: 'excerpt', operation: 'set', value: 'Generated English excerpt' }], semanticGraph: { '@graph': [expect.objectContaining({ '@id': 'https://site.test/en/post' })] } } } })
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    expect(create).toHaveBeenCalledTimes(1)
+    for (const value of ['Résumé privé FR', 'Texte français', 'Titre français', 'private-fixture-key']) expect(fetchMock.mock.calls[0][1].body).not.toContain(value)
   })
 
   test('persists validated usage on successful and failed proposals outside the SEO output', async () => {

@@ -1,4 +1,77 @@
-import type { PayloadRequest } from 'payload'
+import type { Field, PayloadRequest } from 'payload'
+
+/** A relationship/upload policy. Creation is always an explicit host decision. */
+export interface EditorialRelationOptions {
+  relationTo: string | readonly string[]
+  allowCreate: boolean
+}
+
+export interface EditorialFieldOptions {
+  /** Exact schema paths, without document array indexes or wildcards. */
+  include: readonly string[]
+  /** Removes an exact path and its descendants; content is always forbidden. */
+  exclude?: readonly string[]
+  relations?: Record<string, EditorialRelationOptions>
+}
+
+export type EditorialFieldType = 'text' | 'textarea' | 'richText' | 'number' | 'date'
+  | 'checkbox' | 'select' | 'relationship' | 'upload' | 'group' | 'array' | 'blocks'
+
+/** Schema metadata for server-side value validation, never client-provided. */
+export interface EditorialField {
+  path: string
+  type: EditorialFieldType
+  field: Field
+  ancestors: { path: string; type: 'group' | 'array' | 'blocks'; blockSlug?: string }[]
+  /** Whole-container patches must validate every nested value against these children. */
+  children?: EditorialField[]
+  relation?: EditorialRelationOptions
+}
+
+export interface EditorialRegistry {
+  collection: string
+  fields: EditorialField[]
+  exclude: readonly string[]
+  relations: Record<string, EditorialRelationOptions>
+}
+
+export interface EditorialPatch {
+  /** Exact configured schema path. */
+  path: string
+  operation: 'set'
+  value: unknown
+  rationale?: string
+}
+
+export interface RelatedDraft {
+  collection: string
+  localId: string
+  locale: string
+  /** Values keyed by exact configured editorial paths, never arbitrary document data. */
+  fields: Record<string, unknown>
+  graphNodeId: `draft:${string}`
+}
+
+export interface EditorialProposalPayload {
+  locale: string
+  patches: EditorialPatch[]
+  relatedDrafts: RelatedDraft[]
+  /** One graph, with property provenance kept outside rendered JSON-LD. */
+  semanticGraph?: EditorialSemanticGraph
+  graphBindings?: EditorialGraphBinding[]
+}
+
+export interface EditorialSemanticGraph extends Record<string, unknown> {
+  '@context': 'https://schema.org'
+  '@graph': Record<string, unknown>[]
+}
+
+/** Every non-draft node property belongs to exactly one proposed patch. */
+export interface EditorialGraphBinding {
+  path: string
+  nodeId: string
+  properties: string[]
+}
 
 /** The host owns content extraction and localized public routing. */
 export interface CollectionSeoOptions {
@@ -14,6 +87,8 @@ export interface CollectionSeoOptions {
     locale: string
   }) => string | null | undefined | Promise<string | null | undefined>
   mediaCollection: string
+  /** Opt-in AI field proposals; omitted means SEO-only behavior. */
+  editorialFields?: EditorialFieldOptions
 }
 
 /** Server-only configuration: never pass this object to client components. */
@@ -32,6 +107,15 @@ export interface NimSeoPluginOptions {
     organization: {
       name: string
       url: string
+      /** Optional trusted NAP facts used for Organization/LocalBusiness JSON-LD. */
+      telephone?: string
+      address?: {
+        streetAddress?: string
+        addressLocality?: string
+        addressRegion?: string
+        postalCode?: string
+        addressCountry?: string
+      }
     }
   }
   permissions: {
@@ -46,10 +130,13 @@ export interface NimSeoPluginOptions {
 /** Host-compatible options with optional settings resolved to their defaults. */
 export interface ValidatedPluginOptions extends NimSeoPluginOptions {
   bulk: boolean
+  /** Startup-resolved host schema, consumed by server workflows only. */
+  editorialRegistries: Record<string, EditorialRegistry>
 }
 
 /** Unapplied proposal data, reviewed by an editor before becoming approved SEO. */
 export interface SeoProposalPayload {
+  editorial?: EditorialProposalPayload
   meta: {
     title: string
     description: string

@@ -15,6 +15,7 @@ const options: ValidatedPluginOptions = {
     },
   },
   locales: ['fr', 'en'], bulk: false,
+  editorialRegistries: {},
   nim: { baseURL: 'https://nim.test/v1', apiKey: 'private-fixture-key', model: 'fixture' },
   site: { defaultLocale: 'fr', organization: { name: ' Site ', url: 'https://site.test' } },
   permissions: { generate: () => true, apply: () => true, manage: () => true },

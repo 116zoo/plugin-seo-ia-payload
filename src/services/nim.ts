@@ -1,5 +1,7 @@
 import type { NimConfig, SeoProposalPayload } from '../types.js'
+import type { EditorialValidationContext } from './editorialValidation.js'
 import type { GenerationInput } from './content.js'
+import { editorialGenerationPrompt, editorialGenerationSpecification } from './editorialGeneration.js'
 import { parseProposalOutput, ProposalValidationError, type ProposalValidationDiagnostic } from './validation.js'
 import { providerUsage, type NimUsage } from './usage.js'
 
@@ -41,10 +43,11 @@ Use only the requested locale. Do not translate or copy content from another loc
 Return exactly these four groups (no extra fields):
 meta: {title: nonempty string, description: nonempty string, canonical?: absolute HTTP(S) URL, robots?: string, focusKeyphrase?: string}.
 social: {image?: selected media id preserving its string or number type, imageAlt?: string, imageFilename?: string, imageCaption?: string, recommendedWidth?: positive integer, recommendedHeight?: positive integer, ogTitle?: string, ogDescription?: string, twitterCard?: "summary" or "summary_large_image"}.
-schema: array of safe Schema.org JSON-LD objects, with @context "https://schema.org" and canonical @type/@id keys (never type/id aliases). Allowed root types: WebPage, Article, BlogPosting, BreadcrumbList, Organization, WebSite, FAQPage. Supporting nested types: those root types plus Person, ImageObject, ListItem, Question, Answer, PostalAddress, ContactPoint, Thing. Use FAQPage only for questions and answers actually present in the source.
-citability: {summary: plain text of at most 2000 characters, sources?: absolute HTTP(S) URL strings, claims?: plain text strings}.
+schema: array of safe Schema.org JSON-LD objects, with @context "https://schema.org" and canonical @type/@id keys (never type/id aliases). Allowed root types: WebPage, Article, BlogPosting, BreadcrumbList, Organization, LocalBusiness, WebSite, FAQPage. Supporting nested types: those root types plus Person, ImageObject, ListItem, Question, Answer, PostalAddress, ContactPoint, Thing. Use FAQPage only for questions and answers actually present in the source.
+citability: {summary: plain text of at most 2000 characters, sources?: array of absolute HTTP(S) URL strings, claims?: array of plain text strings}.
 Use no HTML, scripts, control characters, credentials or unsafe URLs. Select an image only from selectedMedia; if it is empty omit image and do not invent an asset. Never generate an image.
-If the source has no public url, omit canonical and all page URL-dependent schema (WebPage, Article, BlogPosting, BreadcrumbList, WebSite, FAQPage). Empty schema arrays and empty social objects are allowed.
+When trusted site.organization NAP facts are present, propose a connected multi-schema JSON-LD graph in schema: one object with @context and @graph. Prefer nodes for the source page, Organization or LocalBusiness, and BreadcrumbList when supported; connect them with @id references. Put NAP on the Organization/LocalBusiness node using name, url, telephone and PostalAddress (streetAddress, addressLocality, addressRegion, postalCode, addressCountry). Never invent, normalize, or complete a missing NAP value. Keep one coherent @graph instead of unrelated standalone schema objects when multiple nodes are proposed.
+If the source has no public url, omit canonical and page URL-dependent schema (WebPage, Article, BlogPosting, BreadcrumbList, WebSite, FAQPage); a trusted Organization/LocalBusiness NAP node may remain. Empty schema arrays and empty social objects are allowed. If any schema node would use an unsupported type, property, URL, or JSON-LD keyword, return schema: [] instead of guessing.
 All optional fields must be omitted when unknown, never null.`
 
 const endpointFor = (config: NimConfig): string => {
@@ -63,13 +66,16 @@ const endpointFor = (config: NimConfig): string => {
 const record = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value)
 
 /** Server-only OpenAI-compatible transport. Only validated proposals leave this boundary. */
-export const createNimClient = (config: NimConfig): NimClient => {
+export const createNimClient = (config: NimConfig, editorial?: EditorialValidationContext): NimClient => {
   if (typeof window !== 'undefined') throw new NimGenerationError('server_only')
   const endpoint = endpointFor(config)
   const { apiKey, model } = config
   return {
     async generate(input) {
       if (typeof window !== 'undefined') throw new NimGenerationError('server_only')
+      if (editorial && (editorial.locale !== input.locale || editorial.registry.collection !== input.collection)) throw new NimGenerationError('invalid_configuration')
+      const specification = editorial && editorial.registry.fields.length ? editorialGenerationSpecification(editorial) : undefined
+      const prompt = specification ? `${systemPrompt.replace('Return exactly these four groups (no extra fields):', 'Return these four SEO groups and the editorial group described below (no other top-level fields):')}\n${editorialGenerationPrompt}` : systemPrompt
       let response: Response
       try {
         response = await fetch(endpoint, {
@@ -78,8 +84,15 @@ export const createNimClient = (config: NimConfig): NimClient => {
           redirect: 'error',
           signal: AbortSignal.timeout(60_000),
           body: JSON.stringify({
-            model, stream: false, response_format: { type: 'json_object' },
-            messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: JSON.stringify(input) }],
+            model,
+            stream: false,
+            // Keep reasoning models from spending the whole request budget before
+            // returning the JSON proposal expected by the validator.
+            max_tokens: 2048,
+            chat_template_kwargs: { enable_thinking: false },
+            response_format: { type: 'json_object' },
+            ...(specification ? { max_tokens: 8192 } : {}),
+            messages: [{ role: 'system', content: prompt }, { role: 'user', content: JSON.stringify({ ...input, ...(specification ? { editorialSpecification: specification } : {}) }) }],
           }),
         })
       } catch {
@@ -102,7 +115,9 @@ export const createNimClient = (config: NimConfig): NimClient => {
       }
       if (typeof choice.message.content !== 'string' || !choice.message.content.trim()) throw new NimGenerationError('invalid_response', undefined, usage)
       try {
-        return { output: parseProposalOutput(choice.message.content, input), ...(usage ? { usage } : {}) }
+        const output = parseProposalOutput(choice.message.content, input, editorial)
+        if (specification && !output.editorial) throw new NimGenerationError('invalid_output', undefined, usage)
+        return { output, ...(usage ? { usage } : {}) }
       } catch (error) {
         throw error instanceof ProposalValidationError
           ? new NimGenerationError('invalid_output', error, usage)

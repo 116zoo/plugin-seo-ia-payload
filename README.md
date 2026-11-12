@@ -166,6 +166,123 @@ Every standalone graph and `@graph` container receives the root
 overridden contexts are rejected by proposal validation. The frontend helper
 also fills missing root contexts on older approved graph values.
 
+## Editorial field configuration
+
+Editorial fields are an explicit per-collection opt-in. Omitting `editorialFields`
+keeps the existing SEO-only behavior. Configure exact Payload schema paths:
+
+```ts
+editorialFields: {
+  include: ['title', 'excerpt', 'faq', 'cta.label', 'tags', 'featuredImage'],
+  exclude: ['content'],
+  relations: {
+    tags: { relationTo: 'tags', allowCreate: true },
+    featuredImage: { relationTo: 'media', allowCreate: false },
+  },
+},
+```
+
+Startup resolves and caches the registry from the host schema. Every included
+path must exist and itself declare `localized: true`; a localized parent alone
+does not qualify an individually included child. Groups, arrays, named tabs and
+block variants use dot paths (`faq.question`, `layout.hero.heading`). Block slugs
+are required; array indexes and wildcards are not configuration paths. Rows,
+collapsibles and unnamed tabs do not add path segments. Shared block references
+resolve against `config.blocks`.
+
+Adapters cover text, textarea, richText, number, date, checkbox, select,
+relationship, upload, group, array, blocks and named tabs (as groups). Including
+a whole localized container covers its validated child schema in that locale.
+Include a container or its child paths, never both. Unsupported types, hidden,
+read-only and virtual fields are rejected. A container containing a forbidden
+field is rejected; configure safe child paths instead.
+
+`content` is always forbidden at every nesting level, even if explicitly
+included. Technical names, including IDs, publication status, slug/routing,
+system authorship, timestamps, access, credentials, versions, file metadata and
+payment fields are also forbidden. Hosts must keep business-sensitive fields out
+of the allowlist. `exclude` removes exact paths and their descendants; a child
+exclusion within an included whole container is rejected to prevent a parent
+object patch from bypassing it. Unknown exclusions are rejected, except the
+mandatory `content` exclusion, which is allowed even without a host field.
+
+Every included relationship/upload, including children of a whole container,
+requires an exact-path `relations` policy with explicit `allowCreate: true` or
+`false`. `relationTo` must match the Payload target or full polymorphic target
+list, and every target must exist. Creation additionally requires each target
+collection in plugin `collections` with its own nonempty `editorialFields`
+allowlist and the same validation rules. Collections without Payload drafts may
+be configured, but creation still requires editor review and selection. Registry
+configuration itself does not generate, create, link, update or publish records.
+
+For application, include a whole localized array/block container (`faq`,
+`layout`) rather than a descendant leaf such as `faq.question`. Patches have no
+row index or stable row identity; descendant patches below arrays/blocks are
+rejected during application. Nested group/tab leaves such as `cta.label` remain
+supported. Whole-container values replace that selected container.
+
+## Reviewing editorial proposals and graphs
+
+When a proposal contains an `editorial` envelope, the admin shows a hierarchical
+diff beside the four SEO groups. Check individual fields and every required
+related draft explicitly. `content` stays with the editor and is never generated,
+selected or applied. The French and English panels operate independently, using
+only the active saved locale; changing document, locale or proposal clears the
+selection. The preview never copies a proposal from another language.
+
+The semantic graph has its own **Apply semantic graph** checkbox. It is mutually
+exclusive with the legacy JSON-LD group. The preview shows selected properties,
+nodes and relations only; `draft:<localId>` identities remain provisional until
+the server creates the selected records and resolves their public URLs. The
+approved value is one JSON-LD object with `@context: 'https://schema.org'` and an
+`@graph` array, stored as the sole entry of `seo.schema`. Without that checkbox,
+editorial application leaves the approved schema unchanged.
+
+The structured editorial response is:
+
+```ts
+editorial: {
+  locale: 'fr',
+  patches: [{ path: 'excerpt', operation: 'set', value: 'Résumé proposé' }],
+  relatedDrafts: [],
+  semanticGraph: {
+    '@context': 'https://schema.org',
+    '@graph': [{ '@id': 'https://example.com/fr/article', '@type': 'Article', description: 'Résumé proposé' }],
+  },
+  graphBindings: [{ path: 'excerpt', nodeId: 'https://example.com/fr/article', properties: ['description'] }],
+}
+```
+
+`semanticGraph` and `graphBindings` are an optional pair. Bindings assign every
+non-draft graph property to one validated patch, allowing safe partial selection.
+For collections with editorial fields, the default NIM client requests proposals
+for every supported configured field, with one locale-specific graph and its
+bindings. It sends only field types, constraints, option values and reachable
+creation policies, never raw Payload field configuration. Unsupported values
+remain omitted rather than fabricated. Existing upload choices come only from
+the editor's selected media collection; other existing relationship IDs require
+a future host-provided candidate catalog. Configured related drafts remain
+available for review when no existing candidate is supplied. The editorial
+completion budget is 8,192 tokens; truncated completions fail validation and are
+stored as failed proposals. SEO-only collections keep the original prompt.
+Related drafts have `{ collection, localId, locale, fields, graphNodeId }`; `fields`
+maps exact configured target paths to proposed values and `graphNodeId` is
+`draft:<localId>`. A relation value references it as `{ localId }` (or inside
+Payload's `{ relationTo, value }` form for polymorphic relations). All local
+dependencies must be explicitly selected and reachable from selected patches.
+The server validates types, locale, source identity and graph safety again when
+applying. Represented relations need a host `resolveURL` on their target
+collection; model-supplied URLs never establish a document's public identity.
+
+Editorial application requires a fresh proposal with an editable-field
+fingerprint; older proposals remain usable for SEO groups only and should be
+regenerated for field application. Creation, field updates, graph and application
+audit share one transaction. SQLite and PostgreSQL currently support the verified
+atomic proposal claim; other adapters reject editorial application until their
+conditional-update guarantee is supported. SEO-only application retains its
+existing adapter compatibility. Related collections with drafts receive drafts;
+collections without drafts receive ordinary records after explicit validation.
+
 ## Permissions and editorial workflow
 
 `generate`, `apply` and `manage` callbacks run on the server and may be asynchronous.
@@ -178,9 +295,11 @@ Protect host role fields and configure least-privilege access for content/media.
 2. Generate a proposal. The current SEO stays unchanged; failed output stores safe
    diagnostics in `seo-proposals`.
 3. Review the four groups: meta, social, schema and citability, with the current
-   approved values beside the proposal. Apply only explicitly selected groups.
+   approved values beside the proposal. If editorial fields are present, also
+   review each field, required related record and optional semantic graph.
+   Apply only the explicit selection.
 4. Application replaces each selected group, including clearing omitted optional
-   values. Unselected SEO groups and source content remain unchanged. This is not
+   values. Unselected fields/groups and `content` remain unchanged. This is not
    a fill-empty operation. Applying consumes the proposal once.
 5. Publish through the host's normal editorial workflow. With Payload drafts
    enabled, application updates the latest draft and never publishes it. Enable

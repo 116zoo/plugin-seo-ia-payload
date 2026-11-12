@@ -31,7 +31,7 @@ describe('parseProposalOutput', () => {
       { '@context': null, '@type': 'Article' },
       { '@context': 'https://foreign.test', '@graph': [{ '@type': 'Article' }] },
       { '@graph': [{ '@context': 'https://foreign.test', '@type': 'Article' }] },
-    ]) expect(() => parseProposalOutput({ ...validOutput(), schema: [graph] }, input)).toThrow(/schema/)
+    ]) expect(parseProposalOutput({ ...validOutput(), schema: [graph] }, input).schema).toEqual([])
   })
 
   test('parses complete JSON proposals and deduplicates repeated structured values without mutation', () => {
@@ -69,7 +69,8 @@ describe('parseProposalOutput', () => {
   test.each(['meta', 'social', 'schema', 'citability'])('requires the generated %s group', (group) => {
     const value: Record<string, unknown> = validOutput()
     delete value[group]
-    expect(() => parseProposalOutput(value, input)).toThrow(/proposal/i)
+    if (group === 'citability') expect(parseProposalOutput(value, input).citability).toEqual({ summary: '' })
+    else expect(() => parseProposalOutput(value, input)).toThrow(/proposal/i)
   })
 
   test.each([
@@ -90,9 +91,46 @@ describe('parseProposalOutput', () => {
     expect(() => parseProposalOutput(value, { ...input, selectedMedia: [] })).toThrow(/social.image/)
   })
 
-  test.each(['javascript:alert(1)', '/relative', 'https://user:secret@site.test/x'])('rejects unsafe canonical and nested schema URLs (%s)', (url) => {
+  test('completes image fields from the selected media when the model omits them', () => {
+    const value = { ...validOutput(), social: { ogTitle: 'Titre OG' } }
+    const parsed = parseProposalOutput(value, {
+      ...input,
+      selectedMedia: [{ id: 7, filename: 'photo.jpg', alt: 'Photo éditoriale', caption: 'Légende', width: 1200, height: 630 }],
+    })
+    expect(parsed.social).toMatchObject({
+      image: 7,
+      imageAlt: 'Photo éditoriale',
+      imageFilename: 'photo.jpg',
+      imageCaption: 'Légende',
+      recommendedWidth: 1200,
+      recommendedHeight: 630,
+      ogTitle: 'Titre OG',
+    })
+  })
+
+  test('keeps generated image fields while filling only missing media metadata', () => {
+    const value = { ...validOutput(), social: { image: 7, imageAlt: 'Alt généré' } }
+    const parsed = parseProposalOutput(value, {
+      ...input,
+      selectedMedia: [{ id: 7, filename: 'photo.jpg', alt: 'Alt source', caption: 'Légende source' }],
+    })
+    expect(parsed.social).toMatchObject({ image: 7, imageAlt: 'Alt généré', imageFilename: 'photo.jpg', imageCaption: 'Légende source' })
+  })
+
+  test('normalizes a selected numeric media ID returned as a string by NIM', () => {
+    const value = { ...validOutput(), social: { image: '7' } }
+    const parsed = parseProposalOutput(value, input)
+    expect(parsed.social.image).toBe(7)
+  })
+
+  test.each([null, 'incomplete response', 42])('normalizes malformed citability blocks (%j)', (citability) => {
+    const parsed = parseProposalOutput({ ...validOutput(), citability }, input)
+    expect(parsed.citability).toEqual({ summary: '' })
+  })
+
+  test.each(['javascript:alert(1)', '/relative', 'https://user:secret@site.test/x'])('drops unsafe nested schema URLs (%s)', (url) => {
     expect(() => parseProposalOutput({ ...validOutput(), meta: { ...validOutput().meta, canonical: url } }, input)).toThrow(/meta.canonical/)
-    expect(() => parseProposalOutput({ ...validOutput(), schema: [{ '@type': 'Article', author: { '@type': 'Person', url } }] }, input)).toThrow(/schema/)
+    expect(parseProposalOutput({ ...validOutput(), schema: [{ '@type': 'Article', author: { '@type': 'Person', url } }] }, input).schema).toEqual([])
   })
 
   test.each([
@@ -104,8 +142,18 @@ describe('parseProposalOutput', () => {
     { '@type': 'Article', author: { '@id': 'javascript:alert(1)' } },
     { '@type': 'Article', unexpected: () => 'not JSON' },
     JSON.parse('{"@type":"Article","__proto__":{"polluted":true}}'),
-  ])('rejects unsafe or unapproved JSON-LD (%j)', (graph) => {
-    expect(() => parseProposalOutput({ ...validOutput(), schema: [graph] }, input)).toThrow(/schema/)
+  ])('drops unsafe or unapproved JSON-LD (%j)', (graph) => {
+    expect(parseProposalOutput({ ...validOutput(), schema: [graph] }, input).schema).toEqual([])
+  })
+
+  test('keeps the proposal valid when NIM returns only an unsafe schema graph', () => {
+    const parsed = parseProposalOutput({
+      ...validOutput(),
+      schema: [{ '@type': 'Product', name: 'Unsupported type' }],
+    }, input)
+    expect(parsed.meta.title).toBe('Titre')
+    expect(parsed.social.image).toBe(7)
+    expect(parsed.schema).toEqual([])
   })
 
   test.each([
@@ -115,23 +163,50 @@ describe('parseProposalOutput', () => {
     { '@type': 'Article', author: { '@type': 'Person', type: 'Product' } },
     { '@type': 'Article', author: { '@type': 'Person', id: 'javascript:alert(1)' } },
     { '@context': 'https://schema.org', '@graph': [{ '@type': 'Article', author: { '@type': 'Person', type: 'Person', id: 'https://site.test/author' } }] },
-  ])('rejects Schema.org keyword aliases consistently at root and nested depths (%j)', (graph) => {
-    expect(() => parseProposalOutput({ ...validOutput(), schema: [graph] }, input)).toThrow(/schema/)
+  ])('drops Schema.org keyword aliases consistently at root and nested depths (%j)', (graph) => {
+    expect(parseProposalOutput({ ...validOutput(), schema: [graph] }, input).schema).toEqual([])
   })
 
   test.each([
     { '@context': 'https://schema.org', '@type': 'Organization', type: 'Article' },
     { '@type': 'Organization', subjectOf: { '@type': 'Organization', type: 'Article' } },
-  ])('rejects aliased page types before no-public-URL filtering (%j)', (graph) => {
-    expect(() => parseProposalOutput({ ...validOutput(), schema: [graph] }, { ...input, url: undefined })).toThrow(/schema/)
+  ])('drops aliased page types before no-public-URL filtering (%j)', (graph) => {
+    expect(parseProposalOutput({ ...validOutput(), schema: [graph] }, { ...input, url: undefined }).schema).toEqual([])
   })
 
   test('accepts each allowed root schema type and safe graph containers', () => {
-    for (const type of ['WebPage', 'Article', 'BlogPosting', 'BreadcrumbList', 'Organization', 'WebSite', 'FAQPage']) {
+    for (const type of ['WebPage', 'Article', 'BlogPosting', 'BreadcrumbList', 'Organization', 'LocalBusiness', 'WebSite', 'FAQPage']) {
       expect(parseProposalOutput({ ...validOutput(), schema: [{ '@context': 'https://schema.org', '@type': type }] }, input).schema).toHaveLength(1)
     }
+    const napGraph = [{ '@context': 'https://schema.org', '@graph': [
+      { '@id': input.url, '@type': 'WebPage', name: 'Page', about: { '@id': 'https://site.test/#organization' } },
+      { '@id': 'https://site.test/#organization', '@type': 'LocalBusiness', name: 'Site', url: 'https://site.test', telephone: '+33123456789', address: { '@type': 'PostalAddress', streetAddress: '1 rue Exemple', addressLocality: 'Paris', postalCode: '75001', addressCountry: 'FR' } },
+    ] }]
+    expect(parseProposalOutput({ ...validOutput(), schema: napGraph }, input).schema).toEqual(napGraph)
     const schema = [{ '@context': 'https://schema.org', '@graph': [{ '@type': 'Article', url: input.url }, { '@type': 'Organization', url: 'https://site.test' }] }]
     expect(parseProposalOutput({ ...validOutput(), schema }, input).schema).toEqual(schema)
+  })
+
+  test('allows supporting types only inside graph containers or nested entities', () => {
+    for (const type of ['Person', 'ImageObject', 'Thing', 'ListItem', 'Question', 'Answer', 'PostalAddress', 'ContactPoint']) {
+      const node = { '@type': type, name: 'Supporting entity' }
+      expect(parseProposalOutput({ ...validOutput(), schema: [node] }, input).schema).toEqual([])
+      expect(parseProposalOutput({ ...validOutput(), schema: [{ '@graph': [node] }] }, input).schema).toEqual([
+        { '@context': 'https://schema.org', '@graph': [node] },
+      ])
+    }
+  })
+
+  test.each([
+    { '@type': 'Product', name: 'Unsupported entity' },
+    { '@type': ['Person', 'Product'] },
+    { '@type': 'Person', url: 'javascript:alert(1)' },
+    { '@type': 'ImageObject', contentUrl: 'https://user:secret@site.test/photo.jpg' },
+    { '@context': 'https://foreign.test', '@type': 'Thing' },
+    { '@type': 'Thing', name: '<script>unsafe</script>' },
+    { name: 'Missing type' },
+  ])('drops unsupported or unsafe supporting graph members (%j)', (node) => {
+    expect(parseProposalOutput({ ...validOutput(), schema: [{ '@graph': [node] }] }, input).schema).toEqual([])
   })
 
   test('omits canonical and page URL-required schema without inventing a public URL', () => {
@@ -170,8 +245,8 @@ describe('parseProposalOutput', () => {
     { '@type': 'Article', '@id': { url: 'https://site.test' } },
     { '@type': ['Article', 12] },
     { '@graph': [] },
-  ])('rejects malformed JSON-LD structural and URL values (%j)', (graph) => {
-    expect(() => parseProposalOutput({ ...validOutput(), schema: [graph] }, input)).toThrow(/schema/)
+  ])('drops malformed JSON-LD structural and URL values (%j)', (graph) => {
+    expect(parseProposalOutput({ ...validOutput(), schema: [graph] }, input).schema).toEqual([])
   })
 
   test('deduplicates graphs regardless of object key order', () => {
@@ -182,6 +257,6 @@ describe('parseProposalOutput', () => {
   test('rejects cycles with safe diagnostics rather than recursing indefinitely', () => {
     const graph: Record<string, unknown> = { '@type': 'Article' }
     graph.author = graph
-    expect(() => parseProposalOutput({ ...validOutput(), schema: [graph] }, input)).toThrow(/proposal/i)
+    expect(parseProposalOutput({ ...validOutput(), schema: [graph] }, input).schema).toEqual([])
   })
 })

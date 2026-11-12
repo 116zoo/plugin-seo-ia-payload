@@ -24,6 +24,7 @@ export const buildProposalsCollection = (options: ValidatedPluginOptions): Colle
     { name: 'sourceID', type: 'text', required: true, index: true },
     { name: 'locale', type: 'select', options: options.locales, required: true, index: true },
     { name: 'sourceFingerprint', type: 'text', required: true },
+    { name: 'editorialSourceFingerprint', type: 'text' },
     { name: 'sourceSnapshot', type: 'json' },
     { name: 'output', type: 'json' },
     { name: 'usage', type: 'json' },
@@ -32,6 +33,7 @@ export const buildProposalsCollection = (options: ValidatedPluginOptions): Colle
     { name: 'state', type: 'select', options: ['draft', 'approved', 'applied', 'discarded', 'failed'], defaultValue: 'draft', required: true, index: true },
     actorField(),
     { name: 'appliedAt', type: 'date' },
+    { name: 'appliedSelection', type: 'json' },
     { name: 'run', type: 'relationship', relationTo: 'seo-runs' },
     {
       name: 'errors', type: 'array', fields: [

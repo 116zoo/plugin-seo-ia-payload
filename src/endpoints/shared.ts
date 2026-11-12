@@ -26,7 +26,7 @@ export const readBody = async <T>(req: PayloadRequest, schema: z.ZodType<T>): Pr
 export const errorResponse = (error: unknown): Response => {
   if (error instanceof SeoRequestError) return Response.json({ error: { code: error.code, message: error.message } }, { status: error.status })
   const message = error instanceof Error ? error.message : ''
-  if (['Only draft SEO proposals can be applied.', 'SEO proposal locale must match the active locale.', 'SEO proposal is stale; regenerate it before applying.'].includes(message)) {
+  if (['Only draft SEO proposals can be applied.', 'SEO proposal locale must match the active locale.', 'SEO proposal is stale; regenerate it before applying.', 'Editorial proposal is stale; regenerate it before applying.'].includes(message)) {
     return Response.json({ error: { code: 'proposal_conflict', message } }, { status: 409 })
   }
   const status = error && typeof error === 'object' && 'status' in error ? error.status : undefined

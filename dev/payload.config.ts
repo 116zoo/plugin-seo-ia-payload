@@ -46,7 +46,11 @@ export default buildConfig({
       }],
     },
     Media,
-    Posts,
+    { slug: 'tags', admin: { useAsTitle: 'name' }, fields: [{ name: 'name', type: 'text', localized: true, required: true }] },
+    { ...Posts, fields: [...Posts.fields,
+      { name: 'excerpt', type: 'textarea', localized: true },
+      { name: 'tags', type: 'relationship', relationTo: 'tags', hasMany: true, localized: true },
+    ] },
   ],
   jobs: { tasks: [] },
   plugins: [
@@ -61,6 +65,13 @@ export default buildConfig({
               ? `https://example.test/${locale}/posts/${encodeURIComponent(doc.slug)}`
               : undefined,
           mediaCollection: 'media',
+          editorialFields: { include: ['title', 'excerpt', 'tags'], relations: { tags: { relationTo: 'tags', allowCreate: true } } },
+        },
+        tags: {
+          titleField: 'name', localizedSourceFields: ['name'],
+          extractContent: ({ doc }) => String(doc.name ?? ''),
+          resolveURL: ({ doc, locale }) => `https://example.test/${locale}/tags/${String(doc.id)}`,
+          mediaCollection: 'media', editorialFields: { include: ['name'] },
         },
       },
       locales: ['fr', 'en'],

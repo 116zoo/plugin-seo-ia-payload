@@ -104,6 +104,12 @@ export const buildGenerationInput = async ({
       organization: {
         name: normalizeText(options.site.organization.name),
         url: options.site.organization.url,
+        ...(options.site.organization.telephone ? { telephone: normalizeText(options.site.organization.telephone) } : {}),
+        ...(options.site.organization.address ? { address: Object.fromEntries(
+          Object.entries(options.site.organization.address)
+            .filter(([, value]) => typeof value === 'string' && value.trim())
+            .map(([key, value]) => [key, normalizeText(value as string)]),
+        ) } : {}),
       },
     },
     selectedMedia: selectedMedia.map((media) => normalizeMedia(media, locale)),

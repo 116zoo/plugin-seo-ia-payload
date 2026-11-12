@@ -1,6 +1,7 @@
 import { z } from 'zod'
 
 import type { SeoProposalPayload } from '../types.js'
+import { parseEditorialProposal, type EditorialValidationContext } from './editorialValidation.js'
 import { isPublicURL, type GenerationInput } from './content.js'
 
 export interface ProposalValidationDiagnostic {
@@ -20,7 +21,7 @@ export class ProposalValidationError extends Error {
   }
 }
 
-const rootTypes = new Set(['WebPage', 'Article', 'BlogPosting', 'BreadcrumbList', 'Organization', 'WebSite', 'FAQPage'])
+const rootTypes = new Set(['WebPage', 'Article', 'BlogPosting', 'BreadcrumbList', 'Organization', 'LocalBusiness', 'WebSite', 'FAQPage'])
 const nestedTypes = new Set([...rootTypes, 'Person', 'ImageObject', 'ListItem', 'Question', 'Answer', 'PostalAddress', 'ContactPoint', 'Thing'])
 const pageTypes = new Set(['WebPage', 'Article', 'BlogPosting', 'BreadcrumbList', 'WebSite', 'FAQPage'])
 const urlFields = new Set(['@id', 'url', 'sameAs', 'image', 'logo', 'contentUrl', 'embedUrl', 'thumbnailUrl', 'mainEntityOfPage', 'isPartOf', 'license', 'discussionUrl', 'item', 'subjectOf', 'sdLicense'])
@@ -44,7 +45,7 @@ const schemaGraph = z.custom<Record<string, unknown>>((value) => value !== null 
   const ancestors = new Set<object>()
   let nodes = 0
   const invalid = () => ctx.addIssue({ code: 'custom', message: 'Unsafe or unsupported JSON-LD.' })
-  const visit = (value: unknown, depth: number, key?: string, root = false): boolean => {
+  const visit = (value: unknown, depth: number, key?: string, root = false, graphMember = false): boolean => {
     nodes += 1
     if (depth > 32 || nodes > 5000) return false
     if (key && urlFields.has(key) && typeof value !== 'string') {
@@ -54,7 +55,7 @@ const schemaGraph = z.custom<Record<string, unknown>>((value) => value !== null 
     if (typeof value === 'string') {
       if (/[<>\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/u.test(value)) return false
       if (key === '@context') return value === 'https://schema.org'
-      if (key === '@type') return (root ? rootTypes : nestedTypes).has(value)
+      if (key === '@type') return (root && !graphMember ? rootTypes : nestedTypes).has(value)
       return !(key && urlFields.has(key)) || isPublicURL(value)
     }
     if (typeof value === 'number') return Number.isFinite(value)
@@ -63,22 +64,24 @@ const schemaGraph = z.custom<Record<string, unknown>>((value) => value !== null 
     ancestors.add(value)
     let valid: boolean
     if (Array.isArray(value)) {
-      valid = value.every((entry) => visit(entry, depth + 1, key, root))
+      valid = value.every((entry) => visit(entry, depth + 1, key, root, graphMember))
     } else {
       if (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null) return false
       const record = value as Record<string, unknown>
       if (root && record['@type'] === undefined && (!Array.isArray(record['@graph']) || record['@graph'].length === 0)) return false
       if (record['@type'] !== undefined) {
         const types = Array.isArray(record['@type']) ? record['@type'] : [record['@type']]
-        if (!types.length || !types.every((type) => typeof type === 'string' && (root ? rootTypes : nestedTypes).has(type))) return false
+        if (!types.length || !types.every((type) => typeof type === 'string' && (root && !graphMember ? rootTypes : nestedTypes).has(type))) return false
       }
       if (record['@context'] !== undefined && record['@context'] !== 'https://schema.org') return false
       valid = Object.entries(record).every(([property, entry]) => {
         if (forbiddenKeys.has(property) || (property.startsWith('@') && !jsonLdKeywords.has(property))) return false
         if (property === '@graph') {
-          return Array.isArray(entry) && entry.every((node) => node !== null && typeof node === 'object' && !Array.isArray(node) && visit(node, depth + 1, undefined, true))
+          // A graph can contain supporting entities (Person, ImageObject, Thing),
+          // while standalone schema documents retain the stricter root types.
+          return Array.isArray(entry) && entry.every((node) => node !== null && typeof node === 'object' && !Array.isArray(node) && visit(node, depth + 1, undefined, true, true))
         }
-        return visit(entry, depth + 1, property, property === '@type' && root)
+        return visit(entry, depth + 1, property, property === '@type' && root, graphMember)
       })
     }
     ancestors.delete(value)
@@ -148,8 +151,26 @@ const diagnosticsFromIssues = (issues: z.core.$ZodIssue[]): ProposalValidationDi
     : issue.code === 'custom' ? issue.message : 'Invalid field value.',
 }))
 
+/** Complete image fields from editor-selected media when the model omits them. */
+const completeSelectedMedia = (value: unknown, selectedMedia: GenerationInput['selectedMedia']): unknown => {
+  if (!selectedMedia.length || !value || typeof value !== 'object' || Array.isArray(value)) return value
+  const proposal = value as Record<string, unknown>
+  if (!proposal.social || typeof proposal.social !== 'object' || Array.isArray(proposal.social)) return value
+
+  const social = { ...(proposal.social as Record<string, unknown>) }
+  const selected = selectedMedia.find((media) => media.id === social.image || String(media.id) === String(social.image)) ?? selectedMedia[0]
+  if (social.image === undefined) social.image = selected.id
+  else if (selectedMedia.some((media) => media.id === social.image || String(media.id) === String(social.image))) social.image = selected.id
+  if (social.imageAlt === undefined && selected.alt) social.imageAlt = selected.alt
+  if (social.imageFilename === undefined && selected.filename) social.imageFilename = selected.filename
+  if (social.imageCaption === undefined && selected.caption) social.imageCaption = selected.caption
+  if (social.recommendedWidth === undefined && selected.width) social.recommendedWidth = selected.width
+  if (social.recommendedHeight === undefined && selected.height) social.recommendedHeight = selected.height
+  return { ...proposal, social }
+}
+
 /** Validate the complete proposal before a caller can persist it or offer editorial review. */
-export const parseProposalOutput = (value: unknown, input: Pick<GenerationInput, 'url' | 'selectedMedia'>): SeoProposalPayload => {
+export const parseProposalOutput = (value: unknown, input: Pick<GenerationInput, 'url' | 'selectedMedia'>, editorial?: EditorialValidationContext): SeoProposalPayload => {
   let decoded: unknown = value
   if (typeof value === 'string') {
     try {
@@ -158,7 +179,39 @@ export const parseProposalOutput = (value: unknown, input: Pick<GenerationInput,
       throw new ProposalValidationError([{ code: 'invalid_json', message: 'Expected a JSON proposal object.', path: '' }])
     }
   }
-  const result = proposalSchema.safeParse(decoded)
+  // Some OpenAI-compatible models collapse a one-item string array into a
+  // scalar. Normalize that harmless shape before strict validation.
+  if (decoded && typeof decoded === 'object' && !Array.isArray(decoded)) {
+    const proposal = decoded as Record<string, unknown>
+    const citability = proposal.citability
+    const value = citability && typeof citability === 'object' && !Array.isArray(citability)
+      ? { ...(citability as Record<string, unknown>) }
+      : {}
+    if (typeof value.summary !== 'string') value.summary = ''
+    if (typeof value.claims === 'string') value.claims = [value.claims]
+    else if (value.claims !== undefined && (!Array.isArray(value.claims) || !value.claims.every((item) => typeof item === 'string'))) delete value.claims
+    if (typeof value.sources === 'string') value.sources = [value.sources]
+    else if (value.sources !== undefined && (!Array.isArray(value.sources) || !value.sources.every((item) => typeof item === 'string'))) delete value.sources
+    proposal.citability = value
+  }
+  decoded = completeSelectedMedia(decoded, input.selectedMedia)
+  let editorialOutput: SeoProposalPayload['editorial']
+  if (editorial && decoded && typeof decoded === 'object' && !Array.isArray(decoded) && Object.hasOwn(decoded, 'editorial')) {
+    const { editorial: rawEditorial, ...seo } = decoded as Record<string, unknown>
+    if (editorial.locale !== (input as Partial<GenerationInput>).locale && (input as Partial<GenerationInput>).locale !== undefined) {
+      throw new ProposalValidationError([{ code: 'invalid_editorial', path: 'editorial', message: 'Editorial locale must match the source locale.' }])
+    }
+    editorialOutput = parseEditorialProposal(rawEditorial, editorial.registry, editorial.locale, editorial.registries, input.url)
+    decoded = seo
+  }
+  let result = proposalSchema.safeParse(decoded)
+  // Schema.org is optional enrichment: discard only an unsafe schema graph so
+  // valid meta/social/citability proposals remain reviewable and applicable.
+  if (!result.success && result.error.issues.length > 0
+    && result.error.issues.every((issue) => issue.code === 'custom' && issue.path[0] === 'schema')
+    && decoded && typeof decoded === 'object' && !Array.isArray(decoded)) {
+    result = proposalSchema.safeParse({ ...(decoded as Record<string, unknown>), schema: [] })
+  }
   if (!result.success) throw new ProposalValidationError(diagnosticsFromIssues(result.error.issues))
   const output = result.data
   if (output.social.image !== undefined && !input.selectedMedia.some(({ id }) => id === output.social.image)) {
@@ -171,5 +224,5 @@ export const parseProposalOutput = (value: unknown, input: Pick<GenerationInput,
   // @graph members inherit this root context; never add contexts recursively.
   const uniqueGraphs = new Set(graphs.map((graph) => JSON.stringify(sortedJSON({ ...graph, '@context': 'https://schema.org' }))))
   output.schema = [...uniqueGraphs].map((graph) => JSON.parse(graph) as Record<string, unknown>)
-  return output
+  return { ...output, ...(editorialOutput ? { editorial: editorialOutput } : {}) }
 }
