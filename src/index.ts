@@ -1,13 +1,9 @@
-import type { Plugin } from 'payload'
-
-import type { NimSeoPluginOptions } from './types.js'
+export { nimSeoPlugin, validatePluginOptions } from './plugin.js'
 
 export type {
   CollectionSeoOptions,
   NimConfig,
   NimSeoPluginOptions,
   SeoProposalPayload,
+  ValidatedPluginOptions,
 } from './types.js'
-
-/** Create a Payload config transformer. SEO behavior is added in subsequent tasks. */
-export const nimSeoPlugin = (_options: NimSeoPluginOptions): Plugin => (config) => config

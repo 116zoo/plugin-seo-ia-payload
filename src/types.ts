@@ -37,8 +37,13 @@ export interface NimSeoPluginOptions {
     apply: (args: { req: PayloadRequest }) => boolean | Promise<boolean>
     manage: (args: { req: PayloadRequest }) => boolean | Promise<boolean>
   }
-  /** Enable bulk jobs; requires the host to configure Payload jobs. */
+  /** Enable bulk jobs; defaults to false and requires host-configured Payload jobs. */
   bulk?: boolean
+}
+
+/** Host-compatible options with optional settings resolved to their defaults. */
+export interface ValidatedPluginOptions extends NimSeoPluginOptions {
+  bulk: boolean
 }
 
 /** Unapplied proposal data, reviewed by an editor before becoming approved SEO. */
