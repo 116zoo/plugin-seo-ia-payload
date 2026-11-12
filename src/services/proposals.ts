@@ -5,6 +5,7 @@ import type { SeoProposalPayload, ValidatedPluginOptions } from '../types.js'
 import { buildGenerationInput, type BuildGenerationInputArgs, type GenerationInput } from './content.js'
 import { createNimClient, NimGenerationError, type NimClient } from './nim.js'
 import { parseProposalOutput, ProposalValidationError, type ProposalValidationDiagnostic } from './validation.js'
+import { validateUsage, type NimUsage } from './usage.js'
 
 /** Persisted proposal shape, independent of a host project's generated Payload types. */
 export interface SeoProposal {
@@ -15,6 +16,7 @@ export interface SeoProposal {
   sourceFingerprint: string
   sourceSnapshot: GenerationInput
   output?: SeoProposalPayload
+  usage?: NimUsage
   state: 'draft' | 'approved' | 'applied' | 'discarded' | 'failed'
   actor?: { collection?: string; userID?: string }
   appliedAt?: string
@@ -38,14 +40,18 @@ export const createProposal = async (args: CreateProposalArgs): Promise<SeoPropo
   }
   const input = await buildGenerationInput(args)
   let output: SeoProposalPayload | undefined
+  let usage: NimUsage | undefined
   let errors: ProposalValidationDiagnostic[] | undefined
   try {
     const client = args.client ?? createNimClient(options.nim)
     // Keep the persistence boundary strict even with a trusted custom transport.
-    output = parseProposalOutput(await client.generate(input), input)
+    const generated = await client.generate(input)
+    usage = validateUsage(generated.usage)
+    output = parseProposalOutput(generated.output, input)
   } catch (error) {
     if (error instanceof ProposalValidationError) errors = error.diagnostics
     else if (error instanceof NimGenerationError) {
+      usage = validateUsage(error.usage)
       errors = error.diagnostics.length ? error.diagnostics : [{ code: error.code, message: error.message, path: '' }]
     } else errors = [{ code: 'generation_error', message: 'SEO proposal generation failed.', path: '' }]
   }
@@ -57,6 +63,7 @@ export const createProposal = async (args: CreateProposalArgs): Promise<SeoPropo
     sourceSnapshot: input,
     state: errors ? 'failed' : 'draft',
     ...(output ? { output } : {}),
+    ...(usage ? { usage } : {}),
     ...(errors ? { errors } : {}),
     ...(req.user ? { actor: { collection: req.user.collection, userID: String(req.user.id) } } : {}),
     ...(run !== undefined ? { run } : {}),

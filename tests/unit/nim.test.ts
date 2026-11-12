@@ -26,7 +26,7 @@ describe('createNimClient', () => {
   test('posts JSON-only normalized selected-media context with the configured server bearer and parses the response', async () => {
     const fetchMock = vi.fn().mockResolvedValue(reply(completion()))
     vi.stubGlobal('fetch', fetchMock)
-    expect(await createNimClient(config).generate(await makeInput())).toEqual(output())
+    expect(await createNimClient(config).generate(await makeInput())).toEqual({ output: output() })
     expect(fetchMock).toHaveBeenCalledWith('https://nim.test/v1/chat/completions', expect.objectContaining({ method: 'POST', redirect: 'error', headers: { 'Content-Type': 'application/json', Authorization: 'Bearer private-fixture-key' }, signal: expect.any(AbortSignal) }))
     const request = JSON.parse(fetchMock.mock.calls[0][1].body)
     expect(request).toMatchObject({ model: 'configured-model', stream: false, response_format: { type: 'json_object' } })
@@ -41,6 +41,27 @@ describe('createNimClient', () => {
     vi.stubGlobal('fetch', fetchMock)
     await createNimClient({ ...config, baseURL: 'https://nim.test' }).generate(await makeInput())
     expect(fetchMock.mock.calls[0][0]).toBe('https://nim.test/v1/chat/completions')
+  })
+
+  test('retains only validated provider token counters separately from proposal output', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(reply({ ...completion(), usage: { prompt_tokens: 11, completion_tokens: 7, total_tokens: 18, secret: 'private-fixture-key', cost: 'untrusted billing' } })))
+    const result = await createNimClient(config).generate(await makeInput())
+    expect(result).toEqual({ output: output(), usage: { promptTokens: 11, completionTokens: 7, totalTokens: 18 } })
+    expect(JSON.stringify(result)).not.toContain('private-fixture-key')
+  })
+
+  test.each([{ total_tokens: -1 }, { prompt_tokens: 'private-fixture-key' }, { completion_tokens: 1.5 }, { total_tokens: Number.MAX_SAFE_INTEGER + 1 }, { unknown: 'private' }])('ignores invalid or unknown usage without failing a valid proposal (%j)', async (usage) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(reply({ ...completion(), usage })))
+    expect(await createNimClient(config).generate(await makeInput())).toEqual({ output: output() })
+  })
+
+  test('retains safe usage for paid model or validation failures', async () => {
+    for (const response of [completion('private raw output'), completion(JSON.stringify(output()), 'length')]) {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(reply({ ...response, usage: { total_tokens: 18 } })))
+      const failure = await createNimClient(config).generate(await makeInput()).catch((error: unknown) => error)
+      expect(failure).toMatchObject({ usage: { totalTokens: 18 } })
+      expect(JSON.stringify(failure)).not.toContain('private raw output')
+    }
   })
 
   test.each([

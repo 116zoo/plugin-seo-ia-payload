@@ -68,7 +68,7 @@ const setup = async () => {
   await payload.update({ collection: 'posts', id: post.id, locale: 'en', data: { title: 'Title EN', content: 'Content EN', seo: original, _status: 'published' } })
   const req = await createLocalReq({ user }, payload)
   const doc = await payload.findByID({ collection: 'posts', id: post.id, locale: 'en', fallbackLocale: false, draft: true, depth: 0 })
-  const proposal = await createProposal({ options, req, doc, collection: 'posts', locale: 'en', client: { generate: async () => output } })
+  const proposal = await createProposal({ options, req, doc, collection: 'posts', locale: 'en', client: { generate: async () => ({ output }) } })
   return { req, post, proposal, doc }
 }
 

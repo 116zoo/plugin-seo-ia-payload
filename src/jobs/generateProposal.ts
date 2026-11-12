@@ -6,6 +6,7 @@ import type { ValidatedPluginOptions } from '../types.js'
 import { loadScheduledRun, type RunResult } from './execution.js'
 import { scheduleSeoRun } from './scheduling.js'
 import { sourceSchema } from '../endpoints/shared.js'
+import { validateUsage } from '../services/usage.js'
 
 export interface GenerateProposalInput {
   collection: string
@@ -57,8 +58,8 @@ export const generateProposalTask = (options: ValidatedPluginOptions): TaskConfi
       const generated = prior.docs[0] ? { proposal: prior.docs[0], audit: undefined } : await generateDocumentProposal(options, req, run.document, run.id)
       const { proposal, audit } = generated
       const state = proposal.state === 'failed' ? 'failed' : 'draft'
-      const entry: RunResult = { sourceCollection: run.document.collection, sourceID: String(run.document.sourceID), locale: run.document.locale, proposalID: String(proposal.id), state, ...(audit ? { audit } : {}) }
-      await save({ state: 'completed', finishedAt: new Date().toISOString(), progress: { total: 1, completed: state === 'draft' ? 1 : 0, failed: state === 'failed' ? 1 : 0 }, results: [entry], errors: state === 'failed' ? [{ sourceCollection: entry.sourceCollection, sourceID: entry.sourceID, locale: entry.locale, code: proposal.errors?.[0]?.code ?? 'generation_error', message: 'SEO proposal generation failed for this document.' }] : [] })
+      const entry: RunResult = { sourceCollection: run.document.collection, sourceID: String(run.document.sourceID), locale: run.document.locale, proposalID: String(proposal.id), state, ...(audit ? { audit } : {}), usage: validateUsage(proposal.usage) }
+      await save({ state: 'completed', finishedAt: new Date().toISOString(), progress: { total: 1, completed: state === 'draft' ? 1 : 0, failed: state === 'failed' ? 1 : 0 }, results: [entry], usage: entry.usage, errors: state === 'failed' ? [{ sourceCollection: entry.sourceCollection, sourceID: entry.sourceID, locale: entry.locale, code: proposal.errors?.[0]?.code ?? 'generation_error', message: 'SEO proposal generation failed for this document.' }] : [] })
       return { output: { proposalID: String(proposal.id), state } }
     } catch {
       await save({ state: 'failed', finishedAt: new Date().toISOString(), progress: { total: 1, completed: 0, failed: 1 }, errors: [{ code: 'document_error', message: 'SEO scheduled generation could not be completed.' }] })

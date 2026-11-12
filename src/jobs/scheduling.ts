@@ -9,6 +9,7 @@ export type ScheduleSelection = {
   collections: string[]
   locales: string[]
   filter?: Record<string, unknown>
+  documents?: Pick<GenerateProposalInput, 'collection' | 'sourceID' | 'locale'>[]
 } | { kind: 'document'; document: GenerateProposalInput; collections: string[]; locales: string[] }
 
 /** Server-only scheduling boundary: original actor, immutable scope, exact job binding. */

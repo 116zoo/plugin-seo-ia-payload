@@ -1,9 +1,10 @@
 import type { NimConfig, SeoProposalPayload } from '../types.js'
 import type { GenerationInput } from './content.js'
 import { parseProposalOutput, ProposalValidationError, type ProposalValidationDiagnostic } from './validation.js'
+import { providerUsage, type NimUsage } from './usage.js'
 
 export interface NimClient {
-  generate(input: GenerationInput): Promise<SeoProposalPayload>
+  generate(input: GenerationInput): Promise<{ output: SeoProposalPayload; usage?: NimUsage }>
 }
 
 const messages = {
@@ -23,12 +24,14 @@ export type NimGenerationErrorCode = keyof typeof messages
 export class NimGenerationError extends Error {
   readonly code: NimGenerationErrorCode
   readonly diagnostics: ProposalValidationDiagnostic[]
+  readonly usage?: NimUsage
 
-  constructor(code: NimGenerationErrorCode, validation?: ProposalValidationError) {
+  constructor(code: NimGenerationErrorCode, validation?: ProposalValidationError, usage?: NimUsage) {
     super(messages[code])
     this.name = 'NimGenerationError'
     this.code = code
     this.diagnostics = validation?.diagnostics.map(({ code, message, path }) => ({ code, message, path })) ?? []
+    this.usage = usage
   }
 }
 
@@ -90,19 +93,20 @@ export const createNimClient = (config: NimConfig): NimClient => {
         throw new NimGenerationError('invalid_response')
       }
       if (!record(envelope)) throw new NimGenerationError('invalid_response')
-      if (envelope.error) throw new NimGenerationError('model_error')
+      const usage = providerUsage(envelope.usage)
+      if (envelope.error) throw new NimGenerationError('model_error', undefined, usage)
       const choice: unknown = Array.isArray(envelope.choices) ? envelope.choices[0] : undefined
-      if (!record(choice) || !record(choice.message)) throw new NimGenerationError('invalid_response')
+      if (!record(choice) || !record(choice.message)) throw new NimGenerationError('invalid_response', undefined, usage)
       if (choice.finish_reason !== 'stop' || choice.message.refusal || choice.message.tool_calls || choice.message.function_call) {
-        throw new NimGenerationError('model_error')
+        throw new NimGenerationError('model_error', undefined, usage)
       }
-      if (typeof choice.message.content !== 'string' || !choice.message.content.trim()) throw new NimGenerationError('invalid_response')
+      if (typeof choice.message.content !== 'string' || !choice.message.content.trim()) throw new NimGenerationError('invalid_response', undefined, usage)
       try {
-        return parseProposalOutput(choice.message.content, input)
+        return { output: parseProposalOutput(choice.message.content, input), ...(usage ? { usage } : {}) }
       } catch (error) {
         throw error instanceof ProposalValidationError
-          ? new NimGenerationError('invalid_output', error)
-          : new NimGenerationError('invalid_output')
+          ? new NimGenerationError('invalid_output', error, usage)
+          : new NimGenerationError('invalid_output', undefined, usage)
       }
     },
   }

@@ -161,6 +161,10 @@ The server validates JSON output, allowed Schema.org types, selected media IDs,
 URLs and plain text, and limits citability summaries to 2,000 characters. It does
 not check the truth of claims or guarantee search rankings: editorial review is
 required. JSON-LD is structured data, not arbitrary HTML or scripts.
+Every standalone graph and `@graph` container receives the root
+`@context: 'https://schema.org'` when absent; nested nodes inherit it. Foreign or
+overridden contexts are rejected by proposal validation. The frontend helper
+also fills missing root contexts on older approved graph values.
 
 ## Permissions and editorial workflow
 
@@ -183,6 +187,10 @@ Protect host role fields and configure least-privilege access for content/media.
    drafts on target collections when review before public visibility is required.
 
 Proposals are bound to source collection, ID, locale and a source fingerprint.
+Proposal reads, counts, updates/rejections and deletes additionally require current
+read access to the referenced source in its own locale. Source identities cannot
+be rebound by editing a proposal. Losing source access also removes access to its
+existing proposal snapshots, regardless of SEO role or proposal authorship.
 Source or selected media changes make a proposal stale; regenerate before applying.
 An English proposal cannot be applied to French SEO. The localized `seo.status`
 fields are available for host workflows; do not treat them as publication controls.
@@ -212,14 +220,36 @@ plugin registers `nim-seo-generate-proposal` and `nim-seo-run-audit`; do not enq
 raw plugin tasks yourself because execution requires a server-authorized run
 bound to its job ID and scheduling identity.
 
-The audit dashboard lets managers choose collections and a Payload filter, then
-queue a batch for the active content locale. Each document/locale is processed independently.
-`seo-runs` stores progress, per-document proposals and safe errors. A completed run
+The audit dashboard lists accessible documents in the active content locale.
+Filter by collection, computed completeness status and score range; audit reads
+do not call NIM, write records or schedule jobs, and work with bulk disabled.
+Managers explicitly check individual rows before scheduling a batch. Changing
+filters or pages clears the selection; matching documents are never selected
+automatically. Each selected document/locale is processed independently.
+`POST /nim-seo/audit` with `mode: 'list'` accepts `collection`, `locale`, `status`
+(`all`, `incomplete`, `complete`), `minScore`, `maxScore`, `page` and `limit` (max 100).
+The same endpoint with `mode: 'batch'` requires `collections`, `locales` and a
+nonempty `documents` array of `{ collection, sourceID, locale }` (max 500).
+The server freezes that selection with the scheduling actor and job binding.
+
+`seo-runs` stores progress, per-document proposals, safe errors and provider usage.
+Recognized nonnegative integer `prompt_tokens`, `completion_tokens` and
+`total_tokens` from NIM are stored separately from SEO output as `promptTokens`,
+`completionTokens` and `totalTokens` in proposal/run `usage`. Unknown metadata and
+invalid counters are discarded; no price is inferred. Valid returned usage is
+also retained for failed completions. Run totals derive from persisted outcomes,
+including recovered proposals, without charging the same result twice on resume.
+A completed run
 can contain failures; inspect its failed count and error list. Batch generation
 creates proposals only, with no automatic approval, application or publication.
 Workers reload the scheduling user and re-check permissions; revoked/deleted
 identities cannot borrow the worker's authority. Tasks disable automatic retries;
 review failures before scheduling a new run to control provider cost.
+
+Audit score filtering scans accessible drafts in pages because scores are computed
+from approved fields. Proposal ACL queries enumerate accessible source IDs per
+configured locale. Large repositories should account for that read cost; no stale
+permission cache or source-access bypass is used.
 
 ## Next.js rendering
 

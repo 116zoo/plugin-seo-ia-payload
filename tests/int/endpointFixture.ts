@@ -45,7 +45,7 @@ export const fixture = async (bulk = true) => {
     await payload.update({ collection: 'posts', id: doc.id, locale: 'en', data: { title: title === 'Hidden' ? title : 'Title EN', content: 'Content EN', seo: { meta: { title: 'Approved EN' } }, _status: 'published' } })
     return doc
   }
-  const transport = vi.fn(async () => Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(output) } }] }))
+  const transport = vi.fn(async () => Response.json({ choices: [{ finish_reason: 'stop', message: { content: JSON.stringify(output) } }], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15, untrusted: options.nim.apiKey } }))
   vi.stubGlobal('fetch', transport)
   return { payload, options, users, request, post, transport, cleanup: async () => { vi.unstubAllGlobals(); await payload.destroy(); await rm(directory, { recursive: true, force: true }) } }
 }

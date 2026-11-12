@@ -59,6 +59,8 @@ beforeAll(async () => {
       })],
     }),
   })
+  const source = await payload.create({ collection: 'posts', locale: 'fr', data: { title: 'Workflow source', slug: 'workflow-source', content: 'Source' } })
+  proposalData.sourceID = String(source.id)
   for (const role of ['viewer', 'editor', 'manager', 'generator', 'reviewer']) {
     const user = await payload.create({
       collection: 'users', data: { email: `${role}@example.test`, password: 'fixture-password', role },

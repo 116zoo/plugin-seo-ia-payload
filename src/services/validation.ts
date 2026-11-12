@@ -167,7 +167,9 @@ export const parseProposalOutput = (value: unknown, input: Pick<GenerationInput,
   if (!input.url) delete output.meta.canonical
   const graphs = input.url ? output.schema : removePageGraphs(output.schema) as Record<string, unknown>[]
   // Schema validation permits only JSON values. Clone to avoid retaining source object references.
-  const uniqueGraphs = new Set(graphs.map((graph) => JSON.stringify(sortedJSON(graph))))
+  // Each array entry is an independent JSON-LD document. Nested nodes and
+  // @graph members inherit this root context; never add contexts recursively.
+  const uniqueGraphs = new Set(graphs.map((graph) => JSON.stringify(sortedJSON({ ...graph, '@context': 'https://schema.org' }))))
   output.schema = [...uniqueGraphs].map((graph) => JSON.parse(graph) as Record<string, unknown>)
   return output
 }

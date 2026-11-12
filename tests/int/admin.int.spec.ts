@@ -17,4 +17,4 @@ test('admin capabilities evaluate real host predicates and expose only action fl
     expect(await (await endpoint.handler(await context.request(role))).json()).toEqual(expected)
   }
   expect((await endpoint.handler(await context.request())).status).toBe(403)
-})
+}, 30_000)

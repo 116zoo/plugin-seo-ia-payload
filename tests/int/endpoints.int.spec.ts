@@ -97,7 +97,7 @@ describe('protected SEO endpoints with real Payload storage', () => {
     expect((await audit('editor', { mode: 'batch', collections: ['posts'], locales: ['fr', 'en'] })).status).toBe(403)
     expect((await audit('manager', { mode: 'batch', collections: ['posts'], locales: ['all'] })).status).toBe(400)
     expect(create).not.toHaveBeenCalled(); create.mockRestore()
-    const response = await audit('manager', { mode: 'batch', collections: ['posts'], locales: ['fr', 'en'], filter: { id: { equals: '99999' } } })
+    const response = await audit('manager', { mode: 'batch', collections: ['posts'], locales: ['fr', 'en'], documents: [{ collection: 'posts', sourceID: '99999', locale: 'fr' }], filter: { id: { equals: '99999' } } })
     expect(response.status).toBe(202)
     const { run, jobID } = await response.json()
     expect(run).toMatchObject({ state: 'queued', collections: ['posts'], locales: ['fr', 'en'], actor: { userID: String(f.users.manager.id) }, jobID: String(jobID) })
@@ -109,7 +109,7 @@ describe('protected SEO endpoints with real Payload storage', () => {
     f.payload.config.jobs.access!.queue = () => false
     const before = (await f.payload.find({ collection: 'seo-runs' })).totalDocs
     try {
-      const response = await audit('manager', { mode: 'batch', collections: ['posts'], locales: ['fr'] })
+      const response = await audit('manager', { mode: 'batch', collections: ['posts'], locales: ['fr'], documents: [{ collection: 'posts', sourceID: '99999', locale: 'fr' }] })
       expect(response.status).toBe(403)
       expect((await f.payload.find({ collection: 'seo-runs' })).totalDocs).toBe(before)
     } finally { f.payload.config.jobs.access!.queue = access }

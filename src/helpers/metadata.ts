@@ -97,11 +97,12 @@ export const buildJsonLd = (seo: SeoFields): Record<string, unknown>[] => {
   const schema = seo.schema
   if (!Array.isArray(schema) || !schema.every((graph): graph is Record<string, unknown> =>
     graph !== null && typeof graph === 'object' && !Array.isArray(graph) &&
-    (Object.getPrototypeOf(graph) === Object.prototype || Object.getPrototypeOf(graph) === null))) {
+    (Object.getPrototypeOf(graph) === Object.prototype || Object.getPrototypeOf(graph) === null) &&
+    (graph['@context'] === undefined || graph['@context'] === 'https://schema.org'))) {
     return []
   }
   try {
-    return structuredClone(schema)
+    return structuredClone(schema.map((graph) => ({ ...graph, '@context': 'https://schema.org' })))
   } catch {
     // Non-JSON values from a custom adapter must not break public rendering.
     return []

@@ -17,6 +17,13 @@ const frSeo: SeoFields = {
 }
 
 describe('approved localized frontend helpers', () => {
+  test('normalizes missing root context in stored standalone and @graph values without changing nested nodes', () => {
+    const schema = [{ '@type': 'Article', author: { '@type': 'Person' } }, { '@graph': [{ '@type': 'Organization' }] }]
+    expect(buildJsonLd({ schema })).toEqual(schema.map((graph) => ({ '@context': 'https://schema.org', ...graph })))
+    expect(schema[0]).not.toHaveProperty('@context')
+    expect(buildJsonLd({ schema: [{ '@context': 'https://foreign.test', '@type': 'Article' }] })).toEqual([])
+  })
+
   test('maps resolved approved fields to Next-compatible metadata', () => {
     const metadata: Metadata = buildMetadata(frSeo)
     expect(metadata).toMatchObject({

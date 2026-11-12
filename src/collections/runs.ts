@@ -19,10 +19,10 @@ export const buildRunsCollection = (options: ValidatedPluginOptions): Collection
       if (operation === 'create') {
         // Ignore any submitted actor, including privileged Local API input.
         data.actor = req.user ? { collection: req.user.collection, userID: String(req.user.id) } : {}
-        if (!isSchedulingRequest(req)) { data.jobID = null; data.kind = 'batch'; data.document = null }
+        if (!isSchedulingRequest(req)) { data.jobID = null; data.kind = 'batch'; data.document = null; data.documents = null }
       } else {
         // Scheduling identity and scope cannot be rebound by managers or workers.
-        for (const field of ['actor', 'kind', 'document', 'collections', 'locales', 'filter']) data[field] = originalDoc?.[field] ?? (field === 'actor' ? {} : field === 'kind' ? 'batch' : null)
+        for (const field of ['actor', 'kind', 'document', 'documents', 'collections', 'locales', 'filter']) data[field] = originalDoc?.[field] ?? (field === 'actor' ? {} : field === 'kind' ? 'batch' : null)
         data.jobID = originalDoc?.jobID || (isSchedulingRequest(req) ? data.jobID : null)
       }
       return data
@@ -31,6 +31,7 @@ export const buildRunsCollection = (options: ValidatedPluginOptions): Collection
   fields: [
     { name: 'kind', type: 'select', options: ['batch', 'document'], defaultValue: 'batch', required: true, access: { create: ({ req }) => isSchedulingRequest(req), update: () => false } },
     { name: 'document', type: 'json', access: { create: ({ req }) => isSchedulingRequest(req), update: () => false } },
+    { name: 'documents', type: 'json', access: { create: ({ req }) => isSchedulingRequest(req), update: () => false } },
     { name: 'collections', type: 'select', options: Object.keys(options.collections), hasMany: true, required: true },
     // Avoid colliding with Payload SQL's reserved translation-table suffix.
     { name: 'locales', type: 'select', dbName: 'selected_locales', options: options.locales, hasMany: true, required: true },

@@ -87,11 +87,13 @@ describe('validatePluginOptions', () => {
     }, {
       name: 'layout', type: 'blocks', blocks: [{ slug: 'hero', fields: [
         { name: 'text', type: 'textarea', localized: true },
-      ] }], blockReferences: ['shared'],
+      ] }],
+    }, {
+      name: 'referencedLayout', type: 'blocks', blocks: [], blockReferences: ['shared'],
     })
     config.blocks = [{ slug: 'shared', fields: [{ name: 'text', type: 'textarea', localized: true }] }]
     const options = makeOptions()
-    options.collections.posts.localizedSourceFields = ['title', 'content', 'intro', 'article.details.body', 'sections.text', 'layout.hero.text', 'layout.shared.text']
+    options.collections.posts.localizedSourceFields = ['title', 'content', 'intro', 'article.details.body', 'sections.text', 'layout.hero.text', 'referencedLayout.shared.text']
     expect(validatePluginOptions(options, config).collections.posts.localizedSourceFields).toEqual(options.collections.posts.localizedSourceFields)
     options.collections.posts.localizedSourceFields = ['title', 'article.details.missing']
     expect(() => validatePluginOptions(options, config)).toThrow(/posts.*article.details.missing.*exist/i)

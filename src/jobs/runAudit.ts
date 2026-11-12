@@ -3,12 +3,15 @@ import { z } from 'zod'
 import type { ValidatedPluginOptions } from '../types.js'
 import { generateDocumentProposal } from './generateProposal.js'
 import { loadScheduledRun, type RunResult } from './execution.js'
+import { aggregateUsage, validateUsage } from '../services/usage.js'
+import { sourceSchema } from '../endpoints/shared.js'
 
 export const batchSchema = (options: ValidatedPluginOptions) => z.object({
   collections: z.array(z.string().refine((collection) => Object.hasOwn(options.collections, collection))).min(1).transform((values) => [...new Set(values)]),
   locales: z.array(z.string().refine((locale) => options.locales.includes(locale))).min(1).transform((values) => [...new Set(values)]),
-  filter: z.record(z.string(), z.unknown()).optional(),
-})
+  filter: z.record(z.string(), z.unknown()).nullish().transform((value) => value ?? undefined),
+  documents: z.array(sourceSchema(options).pick({ collection: true, sourceID: true, locale: true })).min(1).max(500).nullish().transform((value) => value ?? undefined),
+}).refine((value) => !value.documents || value.documents.every((doc) => value.collections.includes(doc.collection) && value.locales.includes(doc.locale)))
 export const runAuditTask = (options: ValidatedPluginOptions): TaskConfig<{
   input: { runID: string }
   output: { runID: string; completed: number; failed: number }
@@ -25,9 +28,12 @@ export const runAuditTask = (options: ValidatedPluginOptions): TaskConfig<{
     const results = [...(run.results ?? [])]
     try {
       const selection = batchSchema(options).parse(run)
+      const whereFor = (collection: string, locale: string): Where | undefined => selection.documents
+        ? { and: [selection.filter as Where ?? {}, { id: { in: selection.documents.filter((doc) => doc.collection === collection && doc.locale === locale).map((doc) => doc.sourceID) } }] }
+        : selection.filter as Where | undefined
       run.progress = { total: 0, completed: results.filter(({ state }) => state === 'draft').length, failed: results.filter(({ state }) => state === 'failed').length }
       for (const collection of selection.collections) for (const locale of selection.locales) {
-        const { totalDocs } = await req.payload.find({ collection, locale, fallbackLocale: false, draft: true, depth: 0, req, overrideAccess: false, where: selection.filter as Where, limit: 1, select: { id: true } })
+        const { totalDocs } = await req.payload.find({ collection, locale, fallbackLocale: false, draft: true, depth: 0, req, overrideAccess: false, where: whereFor(collection, locale), limit: 1, select: { id: true } })
         run.progress.total += totalDocs
       }
       await save({ state: 'running', startedAt: new Date().toISOString(), progress: run.progress })
@@ -36,7 +42,7 @@ export const runAuditTask = (options: ValidatedPluginOptions): TaskConfig<{
         let hasNextPage = true
         while (hasNextPage) {
           // IDs only during enumeration; generation reloads one real localized draft.
-          const docs = await req.payload.find({ collection, locale, fallbackLocale: false, draft: true, depth: 0, req, overrideAccess: false, where: selection.filter as Where, limit: 50, page, sort: 'id', select: { id: true } })
+          const docs = await req.payload.find({ collection, locale, fallbackLocale: false, draft: true, depth: 0, req, overrideAccess: false, where: whereFor(collection, locale), limit: 50, page, sort: 'id', select: { id: true } })
           for (const { id } of docs.docs) {
             const sourceID = String(id)
             if (results.some((entry) => entry.sourceCollection === collection && entry.sourceID === sourceID && entry.locale === locale)) continue
@@ -48,6 +54,7 @@ export const runAuditTask = (options: ValidatedPluginOptions): TaskConfig<{
               const proposal = generated.proposal
               entry.proposalID = String(proposal.id)
               entry.state = proposal.state === 'failed' ? 'failed' : 'draft'
+              entry.usage = validateUsage(proposal.usage)
               if (generated.audit) entry.audit = generated.audit
               if (entry.state === 'failed') errors.push({ sourceCollection: collection, sourceID, locale, code: proposal.errors?.[0]?.code ?? 'generation_error', message: 'SEO proposal generation failed for this document.' })
             } catch {
@@ -57,16 +64,16 @@ export const runAuditTask = (options: ValidatedPluginOptions): TaskConfig<{
             if (entry.state === 'failed') run.progress.failed += 1
             else run.progress.completed += 1
             // Commit every document's outcome before moving to the next one.
-            await save({ progress: { ...run.progress }, errors: [...errors], results: [...results] })
+            await save({ progress: { ...run.progress }, errors: [...errors], results: [...results], usage: aggregateUsage(results) })
           }
           hasNextPage = docs.hasNextPage
           page += 1
         }
       }
-      await save({ state: 'completed', finishedAt: new Date().toISOString(), progress: run.progress, results, errors })
+      await save({ state: 'completed', finishedAt: new Date().toISOString(), progress: run.progress, results, errors, usage: aggregateUsage(results) })
       return result()
     } catch {
-      await save({ state: 'failed', finishedAt: new Date().toISOString(), progress: run.progress, results, errors: [...errors, { code: 'batch_error', message: 'SEO batch processing could not be completed.' }] })
+      await save({ state: 'failed', finishedAt: new Date().toISOString(), progress: run.progress, results, usage: aggregateUsage(results), errors: [...errors, { code: 'batch_error', message: 'SEO batch processing could not be completed.' }] })
       throw new Error('SEO batch processing could not be completed.')
     }
   },

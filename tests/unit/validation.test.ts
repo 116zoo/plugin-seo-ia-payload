@@ -17,6 +17,23 @@ const validOutput = () => ({
 })
 
 describe('parseProposalOutput', () => {
+  test('normalizes Schema.org context on every standalone root and graph container; nested nodes inherit', () => {
+    const schema = [
+      { '@type': 'Article', author: { '@type': 'Person', name: 'Author' } },
+      { '@graph': [{ '@type': 'Article', headline: 'Title' }, { '@type': 'Organization', name: 'Publisher' }] },
+    ]
+    const parsed = parseProposalOutput({ ...validOutput(), schema }, input)
+    expect(parsed.schema).toEqual(schema.map((graph) => ({ '@context': 'https://schema.org', ...graph })))
+    expect(parsed.schema[0].author).not.toHaveProperty('@context')
+    expect((parsed.schema[1]['@graph'] as object[])[0]).not.toHaveProperty('@context')
+    expect(schema[0]).not.toHaveProperty('@context')
+    for (const graph of [
+      { '@context': null, '@type': 'Article' },
+      { '@context': 'https://foreign.test', '@graph': [{ '@type': 'Article' }] },
+      { '@graph': [{ '@context': 'https://foreign.test', '@type': 'Article' }] },
+    ]) expect(() => parseProposalOutput({ ...validOutput(), schema: [graph] }, input)).toThrow(/schema/)
+  })
+
   test('parses complete JSON proposals and deduplicates repeated structured values without mutation', () => {
     const value = validOutput()
     value.schema.push({ ...value.schema[0] })
@@ -128,7 +145,7 @@ describe('parseProposalOutput', () => {
     const parsed = parseProposalOutput(value, { ...input, url: undefined })
     expect(parsed.meta.canonical).toBeUndefined()
     expect(parsed.schema).toEqual([
-      { '@type': 'Organization', url: 'https://site.test' },
+      { '@context': 'https://schema.org', '@type': 'Organization', url: 'https://site.test' },
       { '@context': 'https://schema.org', '@graph': [{ '@type': 'Organization', name: 'Site' }] },
     ])
     expect(value.meta.canonical).toBe('https://site.test/fr/x')
@@ -144,7 +161,7 @@ describe('parseProposalOutput', () => {
 
   test('removes nested page schema when the host cannot resolve a public URL', () => {
     const schema = [{ '@type': 'Organization', name: 'Site', subjectOf: { '@type': 'Article', url: 'https://invented.test/page' } }]
-    expect(parseProposalOutput({ ...validOutput(), schema }, { ...input, url: undefined }).schema).toEqual([{ '@type': 'Organization', name: 'Site' }])
+    expect(parseProposalOutput({ ...validOutput(), schema }, { ...input, url: undefined }).schema).toEqual([{ '@context': 'https://schema.org', '@type': 'Organization', name: 'Site' }])
   })
 
   test.each([

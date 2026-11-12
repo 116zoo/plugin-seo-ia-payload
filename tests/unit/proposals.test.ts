@@ -17,7 +17,7 @@ const output: SeoProposalPayload = { meta: { title: 'Proposed title', descriptio
 const setup = () => {
   const create = vi.fn(async ({ data }) => ({ id: 42, ...data }))
   const req = { user: { id: 9, collection: 'users' }, payload: { create } } as unknown as PayloadRequest
-  const generate = vi.fn(async () => structuredClone(output))
+  const generate = vi.fn(async () => ({ output: structuredClone(output) }))
   const args: CreateProposalArgs = {
     options, req, collection: 'posts', locale: 'en',
     doc: { id: 12, title: { en: 'English title', fr: 'Titre français' }, content: { en: 'English source', fr: 'Texte français' }, media: [{ id: 'unselected-media-id' }], seo: { meta: { title: 'Approved title' } } },
@@ -49,6 +49,16 @@ describe('createProposal', () => {
     expect(await createProposal(args)).toMatchObject({ state: 'draft', output })
   })
 
+  test('persists validated usage on successful and failed proposals outside the SEO output', async () => {
+    const { args } = setup()
+    args.client = { generate: async () => ({ output, usage: { promptTokens: 10, totalTokens: 15 } }) }
+    expect(await createProposal(args)).toMatchObject({ state: 'draft', output, usage: { promptTokens: 10, totalTokens: 15 } })
+    args.client = { generate: async () => { throw new NimGenerationError('invalid_output', undefined, { totalTokens: 20 }) } }
+    const failed = await createProposal(args)
+    expect(failed).toMatchObject({ state: 'failed', usage: { totalTokens: 20 } })
+    expect(failed.output).toBeUndefined()
+  })
+
   test('persists safe typed generation failures with no output', async () => {
     const { args, generate } = setup()
     generate.mockRejectedValue(new NimGenerationError('http_error'))
@@ -67,7 +77,7 @@ describe('createProposal', () => {
 
   test('revalidates client output before persistence and retains only safe parser diagnostics', async () => {
     const { args, generate } = setup()
-    generate.mockResolvedValue({ ...output, social: { image: 'unselected-media-id' } })
+    generate.mockResolvedValue({ output: { ...output, social: { image: 'unselected-media-id' } } })
     const proposal = await createProposal(args)
     expect(proposal).toMatchObject({ state: 'failed', errors: [expect.objectContaining({ code: 'unselected_media', path: 'social.image' })] })
     expect(proposal.output).toBeUndefined()

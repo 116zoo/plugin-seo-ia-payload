@@ -8,7 +8,7 @@ let f: Awaited<ReturnType<typeof fixture>>
 beforeAll(async () => { f = await fixture() }, 30_000)
 afterAll(async () => { await f?.cleanup() })
 const schedule = async (sourceID: string | number, locales = ['fr', 'en']) => {
-  const response = await auditEndpoint(f.options).handler(await f.request('manager', { mode: 'batch', collections: ['posts'], locales, filter: { id: { equals: sourceID } } }))
+  const response = await auditEndpoint(f.options).handler(await f.request('manager', { mode: 'batch', collections: ['posts'], locales, documents: locales.map((locale) => ({ collection: 'posts', sourceID, locale })), filter: { id: { equals: sourceID } } }))
   expect(response.status).toBe(202)
   return response.json()
 }
@@ -28,11 +28,14 @@ describe('Payload jobs create proposals without application', () => {
     const saved = await f.payload.findByID({ collection: 'seo-runs', id: run.id })
     expect(saved).toMatchObject({ state: 'completed', progress: { total: 2, completed: 2, failed: 0 }, startedAt: expect.any(String), finishedAt: expect.any(String) })
     expect(saved.results).toHaveLength(2)
+    expect(saved.usage).toEqual({ promptTokens: 20, completionTokens: 10, totalTokens: 30 })
+    expect(JSON.stringify(saved)).not.toContain(f.options.nim.apiKey)
     expect(saved.results).toEqual(expect.arrayContaining([expect.objectContaining({ sourceCollection: 'posts', sourceID: String(post.id), locale: 'fr', proposalID: expect.any(String), state: 'draft', audit: expect.objectContaining({ locale: 'fr' }) })]))
     const proposals = await f.payload.find({ collection: 'seo-proposals', where: { run: { equals: run.id } } })
     expect(proposals.docs).toHaveLength(2)
     expect(proposals.docs.map((doc) => doc.locale).sort()).toEqual(['en', 'fr'])
     expect(proposals.docs.every((doc) => doc.state === 'draft')).toBe(true)
+    expect(proposals.docs.every((doc) => doc.usage.totalTokens === 15 && !doc.output.usage)).toBe(true)
     expect(await f.payload.findByID({ collection: 'posts', id: post.id, locale: 'all', draft: true, depth: 0 })).toEqual(before)
     const handler = runAuditTask(f.options).handler
     if (typeof handler !== 'function') throw new Error('Missing task handler')
@@ -48,6 +51,15 @@ describe('Payload jobs create proposals without application', () => {
     expect(saved).toMatchObject({ state: 'completed', progress: { total: 2, completed: 1, failed: 1 }, errors: [{ sourceCollection: 'posts', sourceID: String(post.id), locale: 'fr', code: 'transport_error' }] })
     expect(JSON.stringify(saved)).not.toContain(f.options.nim.apiKey)
     expect((await f.payload.find({ collection: 'seo-proposals', where: { run: { equals: run.id } } })).docs.map((proposal) => proposal.state).sort()).toEqual(['draft', 'failed'])
+  })
+  test('includes validated usage from failed model completions in batch totals', async () => {
+    const post = await f.post()
+    const { run, jobID } = await schedule(post.id)
+    f.transport.mockImplementationOnce(async () => Response.json({ choices: [{ finish_reason: 'length', message: { content: 'private incomplete output' } }], usage: { total_tokens: 20 } }))
+    await f.payload.jobs.runByID({ id: jobID, overrideAccess: true, silent: true })
+    const saved = await f.payload.findByID({ collection: 'seo-runs', id: run.id })
+    expect(saved).toMatchObject({ progress: { completed: 1, failed: 1 }, usage: { promptTokens: 10, completionTokens: 5, totalTokens: 35 } })
+    expect(JSON.stringify(saved)).not.toContain('private incomplete output')
   })
   test('a forged second queued job cannot borrow the original manager run', async () => {
     const post = await f.post()
@@ -79,7 +91,7 @@ describe('Payload jobs create proposals without application', () => {
     const limited = await f.payload.create({ collection: 'users', data: { email: 'limited-manager@example.test', password: 'fixture-password', role: 'manager', scope: 'limited' } })
     f.users['limited-manager'] = { ...limited, collection: 'users' } as NonNullable<typeof f.users[string]>
     const restricted = await f.post('Restricted')
-    const response = await auditEndpoint(f.options).handler(await f.request('limited-manager', { mode: 'batch', collections: ['posts'], locales: ['fr'], filter: { id: { equals: restricted.id } } }))
+    const response = await auditEndpoint(f.options).handler(await f.request('limited-manager', { mode: 'batch', collections: ['posts'], locales: ['fr'], documents: [{ collection: 'posts', sourceID: restricted.id, locale: 'fr' }], filter: { id: { equals: restricted.id } } }))
     const { run, jobID } = await response.json()
     await f.payload.update({ collection: 'seo-runs', id: run.id, req: await f.request('limited-manager'), overrideAccess: false, data: { actor: { collection: 'users', userID: String(f.users.manager.id) } } })
     const calls = f.transport.mock.calls.length
@@ -108,6 +120,7 @@ describe('Payload jobs create proposals without application', () => {
     expect(f.transport).toHaveBeenCalledTimes(calls)
     const allowed = await queueGenerateProposal(f.options, await f.request('generator'), { collection: 'posts', sourceID: String(post.id), locale: 'en' })
     await f.payload.jobs.runByID({ id: allowed.jobID, req: await f.request('manager'), overrideAccess: true, silent: true })
+    expect((await f.payload.findByID({ collection: 'seo-runs', id: allowed.run.id })).usage).toEqual({ promptTokens: 10, completionTokens: 5, totalTokens: 15 })
     expect((await f.payload.find({ collection: 'seo-proposals', where: { sourceID: { equals: String(post.id) } } })).docs).toEqual([expect.objectContaining({ state: 'draft', locale: 'en', actor: { collection: 'users', userID: String(f.users.generator.id) } })])
     expect(await f.payload.findByID({ collection: 'posts', id: post.id, locale: 'en', draft: true, depth: 0 })).toEqual(before)
   })
@@ -167,13 +180,13 @@ describe('Payload jobs create proposals without application', () => {
     const calls = f.transport.mock.calls.length
     await f.payload.jobs.runByID({ id: jobID, overrideAccess: true, silent: true })
     expect(f.transport).toHaveBeenCalledTimes(calls)
-    expect(await f.payload.findByID({ collection: 'seo-runs', id: run.id })).toMatchObject({ state: 'completed', progress: { total: 1, completed: 1, failed: 0 } })
+    expect(await f.payload.findByID({ collection: 'seo-runs', id: run.id })).toMatchObject({ state: 'completed', progress: { total: 1, completed: 1, failed: 0 }, usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 } })
     expect((await f.payload.find({ collection: 'seo-proposals', where: { run: { equals: run.id } } })).totalDocs).toBe(1)
   })
   test('paginates all matching documents and persists each document before advancing', async () => {
     const ids: (string | number)[] = []
     for (let index = 0; index < 51; index += 1) ids.push((await f.post(`Batch ${index}`)).id)
-    const response = await auditEndpoint(f.options).handler(await f.request('manager', { mode: 'batch', collections: ['posts'], locales: ['fr'], filter: { id: { in: ids } } }))
+    const response = await auditEndpoint(f.options).handler(await f.request('manager', { mode: 'batch', collections: ['posts'], locales: ['fr'], documents: ids.map((sourceID) => ({ collection: 'posts', sourceID, locale: 'fr' })), filter: { id: { in: ids } } }))
     const { run, jobID } = await response.json()
     const checkpoints: number[] = []
     const hooks = f.payload.collections['seo-runs'].config.hooks.afterChange

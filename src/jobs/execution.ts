@@ -3,9 +3,10 @@ import { allowSeo } from '../collections/shared.js'
 import type { SeoAudit } from '../services/audit.js'
 import type { ValidatedPluginOptions } from '../types.js'
 import type { GenerateProposalInput } from './generateProposal.js'
+import type { NimUsage } from '../services/usage.js'
 
 export interface RunError { sourceCollection?: string; sourceID?: string; locale?: string; code: string; message: string }
-export interface RunResult { sourceCollection: string; sourceID: string; locale: string; proposalID?: string; state: string; audit?: SeoAudit }
+export interface RunResult { sourceCollection: string; sourceID: string; locale: string; proposalID?: string; state: string; audit?: SeoAudit; usage?: NimUsage }
 export interface SeoRun {
   id: string | number
   jobID?: string
