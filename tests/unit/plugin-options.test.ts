@@ -170,6 +170,38 @@ describe('validatePluginOptions', () => {
 })
 
 describe('nimSeoPlugin', () => {
+  test('registers locale-aware UI without serializing provider configuration or replacing host components', async () => {
+    const config = makeConfig()
+    config.admin = { components: { beforeDashboard: ['host/Before'], afterDashboard: ['host/After'] } }
+    const result = await nimSeoPlugin(makeOptions())(config)
+    expect(result.admin?.components?.beforeDashboard).toEqual([
+      'host/Before', {
+        path: '@scope/payload-plugin-nim-seo/client#AuditDashboard',
+        clientProps: { locales: ['fr', 'en'], collections: ['posts'], bulk: false },
+      },
+    ])
+    expect(result.admin?.components?.afterDashboard).toEqual(['host/After'])
+    expect(config.admin.components?.beforeDashboard).toEqual(['host/Before'])
+    expect(result.collections?.find(({ slug }) => slug === 'posts')?.fields).toContainEqual({
+      name: 'nimSeoPanel', type: 'ui', admin: { components: { Field: {
+        path: '@scope/payload-plugin-nim-seo/client#SeoPanel',
+        clientProps: { locales: ['fr', 'en'], mediaCollection: 'media' },
+      } } },
+    })
+  })
+
+  test('rejects a host capability endpoint collision before registration', () => {
+    const config = makeConfig()
+    config.endpoints = [{ path: '/nim-seo/capabilities', method: 'get', handler: () => new Response() }]
+    expect(() => nimSeoPlugin(makeOptions())(config)).toThrow(/capabilities.*reserved/i)
+  })
+
+  test('rejects a conflicting host field instead of adding a duplicate admin panel name', () => {
+    const config = makeConfig()
+    config.collections![0].fields.push({ name: 'nimSeoPanel', type: 'text' })
+    expect(() => nimSeoPlugin(makeOptions())(config)).toThrow(/nimSeoPanel.*reserved/i)
+  })
+
   test('validates the host when Payload applies the plugin', () => {
     const config = makeConfig()
     config.localization = { locales: ['fr'], defaultLocale: 'fr' }
@@ -186,7 +218,8 @@ describe('nimSeoPlugin', () => {
     expect(result.endpoints).toEqual(expect.arrayContaining(config.endpoints))
     expect(config.endpoints).toHaveLength(1)
     expect(result.jobs).toBe(config.jobs)
-    expect(result.admin).toBe(config.admin)
+    expect(result.admin).toMatchObject(config.admin!)
+    expect(config.admin).toEqual({ meta: { titleSuffix: 'Host CMS' } })
     expect(result.collections?.find(({ slug }) => slug === 'media')).toBe(originalCollections[1])
     expect(result.collections?.find(({ slug }) => slug === 'posts')?.fields).toEqual(
       expect.arrayContaining([...originalFields, expect.objectContaining({ name: 'seo' })]),

@@ -6,6 +6,7 @@ import { buildSeoFields } from './fields/seoFields.js'
 import { generateProposalEndpoint } from './endpoints/generate.js'
 import { applyProposalEndpoint } from './endpoints/apply.js'
 import { auditEndpoint } from './endpoints/audit.js'
+import { adminCapabilitiesEndpoint } from './endpoints/admin.js'
 import { generateProposalTask } from './jobs/generateProposal.js'
 import { runAuditTask } from './jobs/runAudit.js'
 
@@ -41,6 +42,9 @@ export const validatePluginOptions = (
       throw configurationError(`${slug}: target collection must exist in Payload collections.`)
     }
     const hostCollection = config.collections!.find((candidate) => candidate.slug === slug)!
+    if (hostCollection.fields.some((field) => 'name' in field && field.name === 'nimSeoPanel')) {
+      throw configurationError(`${slug}.nimSeoPanel: field name is reserved by this plugin; remove or rename the existing field.`)
+    }
     if (hostCollection.fields.some((field) => 'name' in field && field.name === 'seo')) {
       throw configurationError(
         `${slug}.seo: field name is reserved by this plugin; remove or rename the existing field.`,
@@ -99,6 +103,9 @@ export const validatePluginOptions = (
     throw configurationError('bulk requires Payload jobs configuration; configure jobs or disable bulk.')
   }
   for (const endpoint of config.endpoints || []) {
+    if (endpoint.method === 'get' && endpoint.path === '/nim-seo/capabilities') {
+      throw configurationError(`${endpoint.path}: endpoint path is reserved by this plugin.`)
+    }
     if (endpoint.method === 'post' && ['/nim-seo/generate', '/nim-seo/apply', '/nim-seo/audit'].includes(endpoint.path)) {
       throw configurationError(`${endpoint.path}: endpoint path is reserved by this plugin.`)
     }
@@ -122,7 +129,13 @@ export const nimSeoPlugin = (options: NimSeoPluginOptions): Plugin => (config) =
     }
     return {
       ...collection,
-      fields: [...collection.fields, ...buildSeoFields({
+      fields: [...collection.fields, {
+        name: 'nimSeoPanel', type: 'ui' as const,
+        admin: { components: { Field: {
+          path: '@scope/payload-plugin-nim-seo/client#SeoPanel',
+          clientProps: { locales: validated.locales, mediaCollection: target.mediaCollection },
+        } } },
+      }, ...buildSeoFields({
         ...validated,
         collections: { [collection.slug]: target },
       })],
@@ -131,10 +144,17 @@ export const nimSeoPlugin = (options: NimSeoPluginOptions): Plugin => (config) =
   for (const build of [buildProposalsCollection, buildRunsCollection]) {
     collections.push(build(validated))
   }
-  const endpoints = [...(config.endpoints || []), generateProposalEndpoint(validated), applyProposalEndpoint(validated), auditEndpoint(validated)]
+  const endpoints = [...(config.endpoints || []), generateProposalEndpoint(validated), applyProposalEndpoint(validated), auditEndpoint(validated), adminCapabilitiesEndpoint(validated)]
   const jobs = validated.bulk ? {
     ...config.jobs,
     tasks: [...(config.jobs?.tasks ?? []), generateProposalTask(validated), runAuditTask(validated)],
   } : config.jobs
-  return { ...config, collections, endpoints, ...(jobs ? { jobs } : {}) }
+  const admin = { ...config.admin, components: {
+    ...config.admin?.components,
+    beforeDashboard: [...(config.admin?.components?.beforeDashboard ?? []), {
+      path: '@scope/payload-plugin-nim-seo/client#AuditDashboard',
+      clientProps: { locales: validated.locales, collections: Object.keys(validated.collections), bulk: validated.bulk },
+    }],
+  } }
+  return { ...config, admin, collections, endpoints, ...(jobs ? { jobs } : {}) }
 }

@@ -33,17 +33,22 @@
       "default": "./dist/helpers/metadata.js"
     }
   },
-  "files": ["dist", "README.md"],
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "scripts": {
+    "dev": "next dev dev --webpack",
     "build": "tsc -p tsconfig.build.json",
     "prepack": "pnpm build",
     "test": "vitest run",
+    "test:e2e": "playwright test",
     "typecheck": "tsc --noEmit",
     "dev:check": "tsx dev/check-startup.ts"
   },
   "peerDependencies": {
-    "payload": "^3.93.0",
     "@payloadcms/ui": "^3.93.0",
+    "payload": "^3.93.0",
     "react": "^19.0.1 || ^19.1.2 || ^19.2.1 || ^19.3.0",
     "react-dom": "^19.0.1 || ^19.1.2 || ^19.2.1 || ^19.3.0"
   },
@@ -52,6 +57,8 @@
   },
   "devDependencies": {
     "@payloadcms/db-sqlite": "3.93.0",
+    "@payloadcms/next": "3.93.0",
+    "@payloadcms/translations": "3.93.0",
     "@payloadcms/ui": "3.93.0",
     "@playwright/test": "^1.65.0",
     "@types/node": "^22.0.0",

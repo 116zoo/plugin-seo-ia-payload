@@ -1,4 +1,4 @@
 'use client'
 
-// Reserved public boundary for the admin components implemented in Task 8.
-export {}
+export { SeoPanel, type SeoPanelProps } from '../ui/SeoPanel.js'
+export { AuditDashboard, type AuditDashboardProps } from '../ui/AuditDashboard.js'
