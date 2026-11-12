@@ -70,7 +70,11 @@ beforeAll(async () => {
     db: sqliteAdapter({ client: { url: `file:${path.join(databaseDir, 'test.db')}` }, transactionOptions: {} }),
     localization: { locales: ['fr', 'en'], defaultLocale: 'fr', fallback: false }, collections,
     plugins: [nimSeoPlugin(options), (config) => {
-      config.collections!.find(({ slug }) => slug === 'seo-proposals')!.hooks!.beforeChange!.push(({ data, req }) => {
+      const proposals = config.collections!.find(({ slug }) => slug === 'seo-proposals')!
+      for (const field of proposals.fields) if (field.type !== 'ui' && 'name' in field && ['state', 'actor', 'appliedAt', 'appliedSelection'].includes(field.name)) {
+        field.access = { ...field.access, update: ({ req }) => req.context.denyAuditField !== field.name }
+      }
+      proposals.hooks!.beforeChange!.push(({ data, req }) => {
         if (data.state === 'applied' && req.context.failApplication) throw new Error('Application bookkeeping rejected')
       })
       return config
@@ -275,6 +279,50 @@ describe('transactional editorial application', () => {
       await expect(applyProposal({ options, req, proposal, locale: 'fr', ...selection })).rejects.toThrow(/rejected/i)
       expect((await payload.count({ collection: 'tags' })).totalDocs).toBe(tags.totalDocs)
       expect((await payload.count({ collection: 'categories' })).totalDocs).toBe(categories.totalDocs)
+      expect((await read(post.id)).excerpt).toBe('Chapô FR')
+      expect((await payload.findByID({ collection: 'seo-proposals', id: proposal.id })).state).toBe('draft')
+    }
+  })
+
+  test('binds existing related graph nodes and links to server-resolved active-locale identity', async () => {
+    for (const shape of ['forged-node', 'forged-link', 'forged-url', 'missing-link', 'wrong-locale', 'missing-url', 'canonical-link', 'canonical']) {
+      const { req, post, doc, output } = await setup()
+      const category = await payload.create({ collection: 'categories', locale: 'fr', data: { name: 'Catégorie existante' } })
+      const canonical = `https://site.test/fr/categories/${category.id}`
+      const source = `https://site.test/fr/posts/${post.id}`
+      const id = shape === 'forged-node' ? 'https://unrelated.test/entity' : shape === 'wrong-locale' ? canonical.replace('/fr/', '/en/') : ['forged-link', 'missing-link', 'canonical-link'].includes(shape) ? source : canonical
+      const properties = shape === 'forged-link' ? { about: { '@id': 'https://unrelated.test/entity' } }
+        : shape === 'missing-link' ? { about: { '@type': 'Thing', name: 'Catégorie existante' } }
+          : shape === 'canonical-link' ? { about: { '@id': canonical } } : { name: 'Catégorie existante', ...(shape === 'forged-url' ? { url: 'https://unrelated.test/entity' } : {}) }
+      const proposal = await createProposal({ options, req, doc, collection: 'posts', locale: 'fr', client: { generate: async () => ({ output: {
+        ...output, editorial: { locale: 'fr', patches: [{ path: 'category', operation: 'set', value: category.id }], relatedDrafts: [],
+          semanticGraph: { '@context': 'https://schema.org', '@graph': [{ '@id': id, '@type': 'WebPage', ...properties }] },
+          graphBindings: [{ path: 'category', nodeId: id, properties: Object.keys(properties) }],
+        },
+      } }) } })
+      expect(proposal.state).toBe('draft')
+      const applyOptions = shape === 'missing-url' ? { ...options, collections: { ...options.collections, categories: { ...options.collections.categories, resolveURL: () => null } } } : options
+      const apply = () => applyProposal({ options: applyOptions, req, proposal, locale: 'fr', groups: [], editorialPaths: ['category'], applyGraph: true })
+      if (shape === 'canonical' || shape === 'canonical-link') {
+        const applied = await apply()
+        expect(applied.category).toBe(category.id)
+        expect(applied.seo.schema[0]['@graph'][0]['@id']).toBe(shape === 'canonical' ? canonical : source)
+      } else {
+        await expect(apply()).rejects.toThrow(/identity/i)
+        expect((await read(post.id)).category).toBeNull()
+        expect((await payload.findByID({ collection: 'seo-proposals', id: proposal.id })).state).toBe('draft')
+      }
+    }
+  })
+
+  test('rolls back all mutations when final proposal audit fields are silently denied', async () => {
+    for (const field of ['state', 'actor', 'appliedAt', 'appliedSelection']) {
+      const { req, post, proposal } = await setup()
+      const before = await payload.count({ collection: 'tags' })
+      if (field === 'actor') await payload.update({ collection: 'seo-proposals', id: proposal.id, data: { actor: { collection: 'users', userID: 'previous-generator' } } })
+      req.context.denyAuditField = field
+      await expect(applyProposal({ options, req, proposal, locale: 'fr', ...selection })).rejects.toThrow(/audit/i)
+      expect((await payload.count({ collection: 'tags' })).totalDocs).toBe(before.totalDocs)
       expect((await read(post.id)).excerpt).toBe('Chapô FR')
       expect((await payload.findByID({ collection: 'seo-proposals', id: proposal.id })).state).toBe('draft')
     }

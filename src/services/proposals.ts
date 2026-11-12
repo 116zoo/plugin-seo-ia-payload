@@ -2,8 +2,8 @@ import { createHash } from 'node:crypto'
 import { commitTransaction, initTransaction, killTransaction, type Document, type PayloadRequest } from 'payload'
 
 import { allowSeo } from '../collections/shared.js'
-import type { EditorialField, EditorialRegistry, SeoProposalPayload, ValidatedPluginOptions } from '../types.js'
-import { buildGenerationInput, type BuildGenerationInputArgs, type GenerationInput } from './content.js'
+import type { EditorialField, EditorialProposalPayload, EditorialRegistry, SeoProposalPayload, ValidatedPluginOptions } from '../types.js'
+import { buildGenerationInput, isPublicURL, type BuildGenerationInputArgs, type GenerationInput } from './content.js'
 import { resolveEditorialRegistry } from './editorialSchema.js'
 import { buildAppliedGraph, localDraftReferences } from './graph.js'
 import { createNimClient, NimGenerationError, type NimClient } from './nim.js'
@@ -68,8 +68,10 @@ const resolveLocalReferences = (value: unknown, resolved: Map<string, string | n
   }
   return Object.fromEntries(Object.entries(value).map(([key, entry]) => [key, resolveLocalReferences(entry, resolved)]))
 }
-/** Check existing IDs through the host's active-locale read ACL, including nested relation values. */
-const authorizeRelations = async (value: unknown, descriptor: EditorialField, req: PayloadRequest, locale: string): Promise<void> => {
+interface AuthorizedRelation { collection: string; doc: Record<string, unknown> }
+const hasRelations = (field: EditorialField): boolean => ['relationship', 'upload'].includes(field.type) || Boolean(field.children?.some(hasRelations))
+/** Check IDs through the host's active-locale read ACL and retain trusted documents for graph identity. */
+const authorizeRelations = async (value: unknown, descriptor: EditorialField, req: PayloadRequest, locale: string, authorized: AuthorizedRelation[] = []): Promise<void> => {
   if (value === null || value === undefined) return
   if (descriptor.type === 'relationship' || descriptor.type === 'upload') {
     const field = descriptor.field
@@ -78,16 +80,88 @@ const authorizeRelations = async (value: unknown, descriptor: EditorialField, re
     for (const entry of entries) {
       const collection = Array.isArray(field.relationTo) && object(entry) ? entry.relationTo as string : field.relationTo as string
       const id = Array.isArray(field.relationTo) && object(entry) ? entry.value : entry
-      await req.payload.findByID({ collection, id: id as string | number, locale, fallbackLocale: false, draft: true, depth: 0, req, overrideAccess: false })
+      const doc = await req.payload.findByID({ collection, id: id as string | number, locale, fallbackLocale: false, draft: true, depth: 0, req, overrideAccess: false })
+      authorized.push({ collection, doc })
     }
   } else if (['group', 'array', 'blocks'].includes(descriptor.type)) {
     for (const entry of descriptor.type === 'group' ? [value] : value as unknown[]) {
       if (!object(entry)) continue
       const prefix = descriptor.type === 'blocks' ? `${descriptor.path}.${String(entry.blockType)}.` : `${descriptor.path}.`
       for (const child of descriptor.children ?? []) if (child.path.startsWith(prefix)) {
-        await authorizeRelations(entry[child.path.slice(prefix.length)], child, req, locale)
+        await authorizeRelations(entry[child.path.slice(prefix.length)], child, req, locale, authorized)
       }
     }
+  }
+}
+const graphIdentity = (value: unknown): string | undefined => {
+  if (typeof value !== 'string' || !isPublicURL(value)) return undefined
+  const parsed = new URL(value)
+  parsed.hash = ''
+  return parsed.href
+}
+/** Bind graph contributions to ACL-read Payload relations, never model-chosen public identities. */
+const assertGraphIdentities = async (
+  graph: Record<string, unknown>, editorial: EditorialProposalPayload, sourceURL: string | undefined,
+  relations: Map<string, AuthorizedRelation[]>, draftRelations: Map<string, AuthorizedRelation[]>,
+  resolvedDrafts: Record<string, string>, options: ValidatedPluginOptions, locale: string,
+): Promise<void> => {
+  const fail = (): never => { throw new Error('Semantic graph identity does not match the selected server-resolved document.') }
+  const nodes = graph['@graph'] as Record<string, unknown>[]
+  const trustedSource = graphIdentity(sourceURL)
+  const identities = async (records: AuthorizedRelation[]): Promise<Set<string>> => {
+    const result = new Set<string>()
+    for (const { collection, doc } of records) {
+      const resolve = options.collections[collection]?.resolveURL
+      if (!resolve) return fail()
+      const url = await resolve({ doc, locale })
+      const identity = graphIdentity(typeof url === 'string' ? url.trim() : undefined)
+      if (!identity) return fail()
+      result.add(identity)
+    }
+    return result
+  }
+  const assertOwnURL = (node: Record<string, unknown>, ownID: string | undefined): void => {
+    if (Object.hasOwn(node, 'url') && (!ownID || graphIdentity(node.url) !== ownID)) fail()
+  }
+  const assertLinks = (value: unknown, allowed: Set<string>): number => {
+    if (Array.isArray(value)) return value.reduce((count, entry) => count + assertLinks(entry, allowed), 0)
+    if (!object(value)) return 0
+    let count = 0
+    if (Object.hasOwn(value, '@id')) {
+      const identity = graphIdentity(value['@id'])
+      if (!identity || !allowed.has(identity)) return fail()
+      assertOwnURL(value, identity)
+      count++
+    }
+    return count + Object.values(value).reduce<number>((sum, entry) => sum + assertLinks(entry, allowed), 0)
+  }
+  for (const node of nodes) if (trustedSource && graphIdentity(node['@id']) === trustedSource) assertOwnURL(node, trustedSource)
+  for (const [path, records] of relations) {
+    const contributions = (editorial.graphBindings ?? []).filter((binding) => binding.path === path).flatMap((binding) => {
+      const node = nodes.find((node) => node['@id'] === binding.nodeId)
+      return node && binding.properties.some((property) => Object.hasOwn(node, property)) ? [{ binding, node }] : []
+    })
+    if (!contributions.length) continue
+    const allowed = await identities(records)
+    for (const { binding, node } of contributions) {
+      const owner = graphIdentity(node['@id'])
+      if (!owner || (owner !== trustedSource && !allowed.has(owner))) fail()
+      assertOwnURL(node, owner)
+      const linkTargets = new Set(allowed)
+      if (owner !== trustedSource && trustedSource) linkTargets.add(trustedSource)
+      let links = 0
+      for (const property of binding.properties) if (Object.hasOwn(node, property)) links += assertLinks(node[property], linkTargets)
+      if (owner === trustedSource && records.length > 0 && links === 0) fail()
+    }
+  }
+  for (const [localID, url] of Object.entries(resolvedDrafts)) {
+    const node = nodes.find((node) => node['@id'] === url)
+    if (!node) continue
+    const ownID = graphIdentity(url)
+    if (!ownID) return fail()
+    assertOwnURL(node, ownID)
+    const allowed = await identities(draftRelations.get(localID) ?? [])
+    for (const [property, value] of Object.entries(node)) if (!['@id', '@type'].includes(property)) assertLinks(value, allowed)
   }
 }
 /** Payload silently removes field-ACL-denied values. Detect that and roll back the whole application. */
@@ -256,6 +330,8 @@ export const applyProposal = async ({ options, req, proposal: identity, locale, 
       const selected = new Set(relatedDraftIDs)
       const resolved = new Map<string, string | number>()
       const resolvedGraph: Record<string, string> = {}
+      const relations = new Map<string, AuthorizedRelation[]>()
+      const draftRelations = new Map<string, AuthorizedRelation[]>()
       const createDraft = async (localId: string): Promise<void> => {
         if (resolved.has(localId)) return
         const draft = editorial!.relatedDrafts.find((entry) => entry.localId === localId)!
@@ -266,7 +342,9 @@ export const applyProposal = async ({ options, req, proposal: identity, locale, 
         const targetRegistry = resolveEditorialRegistry(options, draft.collection)
         const fields = resolveLocalReferences(draft.fields, resolved) as Record<string, unknown>
         const data = materialize(fields, targetRegistry)
-        for (const [path, value] of Object.entries(fields)) await authorizeRelations(value, writableField(targetRegistry, path), req, locale)
+        const authorized: AuthorizedRelation[] = []
+        for (const [path, value] of Object.entries(fields)) await authorizeRelations(value, writableField(targetRegistry, path), req, locale, authorized)
+        draftRelations.set(localId, authorized)
         const supportsDrafts = Boolean(req.payload.collections[draft.collection]?.config.versions?.drafts)
         const saved = await req.payload.create({ collection: draft.collection, locale, fallbackLocale: false, draft: supportsDrafts, data: { ...data, ...(supportsDrafts ? { _status: 'draft' } : {}) }, depth: 0, req, overrideAccess: false })
         // Read permission is required for every linked document, including a creation.
@@ -283,9 +361,15 @@ export const applyProposal = async ({ options, req, proposal: identity, locale, 
       for (const id of relatedDraftIDs) await createDraft(id)
       for (const path of editorialPaths) {
         selectedFields[path] = resolveLocalReferences(selectedFields[path], resolved)
-        await authorizeRelations(selectedFields[path], writableField(registry!, path), req, locale)
+        const descriptor = writableField(registry!, path)
+        const authorized: AuthorizedRelation[] = []
+        await authorizeRelations(selectedFields[path], descriptor, req, locale, authorized)
+        if (hasRelations(descriptor)) relations.set(path, authorized)
       }
-      if (applyGraph) graph = buildAppliedGraph({ proposal: editorial!, selectedPatches: editorialPaths, selectedDrafts: relatedDraftIDs, resolvedDrafts: resolvedGraph, sourceURL: current.url, registry })
+      if (applyGraph) {
+        graph = buildAppliedGraph({ proposal: editorial!, selectedPatches: editorialPaths, selectedDrafts: relatedDraftIDs, resolvedDrafts: resolvedGraph, sourceURL: current.url, registry })
+        await assertGraphIdentities(graph, editorial!, current.url, relations, draftRelations, resolvedGraph, options, locale)
+      }
     }
     // Payload merges nested groups. Clear omitted optional values in selected groups
     // explicitly, without sending any unselected group (or source/status field).
@@ -304,10 +388,12 @@ export const applyProposal = async ({ options, req, proposal: identity, locale, 
       const resolvedSourceURL = await options.collections[proposal.sourceCollection].resolveURL({ doc: updated, locale })
       if ((typeof resolvedSourceURL === 'string' ? resolvedSourceURL.trim() || undefined : undefined) !== current.url) throw new Error('Applied source URL changed; regenerate the semantic graph before applying.')
     }
-    await req.payload.update({
+    const audit = { state: 'applied', appliedAt: new Date().toISOString(), actor: { collection: req.user!.collection, userID: String(req.user!.id) }, appliedSelection: { groups, editorialPaths, relatedDraftIDs, applyGraph, createdRelated } }
+    const appliedProposal = await req.payload.update({
       collection: 'seo-proposals', id: proposal.id, req, overrideAccess: false, depth: 0,
-      data: { state: 'applied', appliedAt: new Date().toISOString(), actor: { collection: req.user!.collection, userID: String(req.user!.id) }, appliedSelection: { groups, editorialPaths, relatedDraftIDs, applyGraph, createdRelated } },
+      data: audit,
     })
+    if (!valuesMatch(audit, appliedProposal)) throw new Error('Proposal application audit was denied or changed by the host; application was cancelled.')
     if (ownsTransaction) await commitTransaction(req)
     return updated
   } catch (error) {
