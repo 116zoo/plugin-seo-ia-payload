@@ -1,7 +1,7 @@
-import type { PayloadRequest } from 'payload'
+import { commitTransaction, initTransaction, killTransaction, type Document, type PayloadRequest } from 'payload'
 
 import { allowSeo } from '../collections/shared.js'
-import type { SeoProposalPayload } from '../types.js'
+import type { SeoProposalPayload, ValidatedPluginOptions } from '../types.js'
 import { buildGenerationInput, type BuildGenerationInputArgs, type GenerationInput } from './content.js'
 import { createNimClient, NimGenerationError, type NimClient } from './nim.js'
 import { parseProposalOutput, ProposalValidationError, type ProposalValidationDiagnostic } from './validation.js'
@@ -17,6 +17,7 @@ export interface SeoProposal {
   output?: SeoProposalPayload
   state: 'draft' | 'approved' | 'applied' | 'discarded' | 'failed'
   actor?: { collection?: string; userID?: string }
+  appliedAt?: string
   run?: string | number
   errors?: ProposalValidationDiagnostic[]
 }
@@ -63,4 +64,71 @@ export const createProposal = async (args: CreateProposalArgs): Promise<SeoPropo
   // Persistence errors propagate: retrying here could duplicate a successfully written proposal.
   const saved = await req.payload.create({ collection: 'seo-proposals', data, req, overrideAccess: false, depth: 0 })
   return saved as unknown as SeoProposal
+}
+
+export type SeoProposalGroup = keyof SeoProposalPayload
+
+const proposalFields = {
+  meta: ['title', 'description', 'canonical', 'robots', 'focusKeyphrase'],
+  social: ['image', 'imageAlt', 'imageFilename', 'imageCaption', 'recommendedWidth', 'recommendedHeight', 'ogTitle', 'ogDescription', 'twitterCard'],
+  citability: ['summary', 'sources', 'claims'],
+} as const
+
+export interface ApplyProposalArgs {
+  options: ValidatedPluginOptions
+  req: PayloadRequest
+  /** Only the identity is trusted; state and output are reloaded on the server. */
+  proposal: Pick<SeoProposal, 'id'>
+  locale: string
+  groups: readonly [SeoProposalGroup, ...SeoProposalGroup[]]
+}
+
+/** An editor's explicit application; always updates the latest draft without publishing. */
+export const applyProposal = async ({ options, req, proposal: identity, locale, groups }: ApplyProposalArgs): Promise<Document> => {
+  if (typeof window !== 'undefined') throw new Error('SEO application is server-only.')
+  if (!await allowSeo(options, ['apply', 'manage'])({ req })) throw new Error('SEO application permission is required.')
+  if (!Array.isArray(groups) || !groups.length || groups.some((group) => !['meta', 'social', 'schema', 'citability'].includes(group))) {
+    throw new Error('Select at least one valid SEO proposal group.')
+  }
+  if (!options.locales.includes(locale)) throw new Error('Unsupported SEO locale.')
+  const ownsTransaction = await initTransaction(req)
+  if (!await req.transactionID) {
+    delete req.transactionID
+    throw new Error('SEO application requires an effective database transaction; enable transactions in the host adapter.')
+  }
+  try {
+    const proposal = await req.payload.findByID({ collection: 'seo-proposals', id: identity.id, req, overrideAccess: false, depth: 0 }) as unknown as SeoProposal
+    if (proposal.state !== 'draft') throw new Error('Only draft SEO proposals can be applied.')
+    if (proposal.locale !== locale) throw new Error('SEO proposal locale must match the active locale.')
+    if (!Object.hasOwn(options.collections, proposal.sourceCollection)) throw new Error('Unknown SEO source collection.')
+    const media = await Promise.all(proposal.sourceSnapshot.selectedMedia.map(({ id }) => req.payload.findByID({
+      collection: options.collections[proposal.sourceCollection].mediaCollection, id, locale, fallbackLocale: false,
+      depth: 0, req, overrideAccess: false,
+    })))
+    const output = parseProposalOutput(proposal.output, proposal.sourceSnapshot)
+    const doc = await req.payload.findByID({
+      collection: proposal.sourceCollection, id: proposal.sourceID, locale, fallbackLocale: false,
+      draft: true, depth: 0, req, overrideAccess: false,
+    })
+    const current = await buildGenerationInput({ options, collection: proposal.sourceCollection, doc, locale, selectedMedia: media })
+    if (current.fingerprint !== proposal.sourceFingerprint) throw new Error('SEO proposal is stale; regenerate it before applying.')
+    // Payload merges nested groups. Clear omitted optional values in selected groups
+    // explicitly, without sending any unselected group (or source/status field).
+    const seo = Object.fromEntries(groups.map((group) => [group, group === 'schema' ? output.schema : {
+      ...Object.fromEntries(proposalFields[group].map((field) => [field, null])), ...output[group],
+    }]))
+    const updated = await req.payload.update({
+      collection: proposal.sourceCollection, id: proposal.sourceID, locale, fallbackLocale: false,
+      data: { seo }, draft: true, depth: 0, req, overrideAccess: false, overrideLock: false,
+    })
+    await req.payload.update({
+      collection: 'seo-proposals', id: proposal.id, req, overrideAccess: false, depth: 0,
+      data: { state: 'applied', appliedAt: new Date().toISOString(), actor: { collection: req.user!.collection, userID: String(req.user!.id) } },
+    })
+    if (ownsTransaction) await commitTransaction(req)
+    return updated
+  } catch (error) {
+    if (ownsTransaction) await killTransaction(req)
+    throw error
+  }
 }

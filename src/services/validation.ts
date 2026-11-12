@@ -149,7 +149,7 @@ const diagnosticsFromIssues = (issues: z.core.$ZodIssue[]): ProposalValidationDi
 }))
 
 /** Validate the complete proposal before a caller can persist it or offer editorial review. */
-export const parseProposalOutput = (value: unknown, input: GenerationInput): SeoProposalPayload => {
+export const parseProposalOutput = (value: unknown, input: Pick<GenerationInput, 'url' | 'selectedMedia'>): SeoProposalPayload => {
   let decoded: unknown = value
   if (typeof value === 'string') {
     try {

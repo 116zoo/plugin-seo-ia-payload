@@ -23,6 +23,7 @@ export default buildConfig({
   secret: process.env.PAYLOAD_SECRET ?? 'local-fixture-only-do-not-use-in-production',
   db: sqliteAdapter({
     client: { url: process.env.DATABASE_URL ?? `file:${path.join(fixtureDir, 'fixture.db')}` },
+    transactionOptions: {},
   }),
   localization: {
     locales: ['fr', 'en'],
