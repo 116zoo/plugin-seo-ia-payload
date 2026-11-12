@@ -166,6 +166,55 @@ Every standalone graph and `@graph` container receives the root
 overridden contexts are rejected by proposal validation. The frontend helper
 also fills missing root contexts on older approved graph values.
 
+## Editorial field configuration
+
+Editorial fields are an explicit per-collection opt-in. Omitting `editorialFields`
+keeps the existing SEO-only behavior. Configure exact Payload schema paths:
+
+```ts
+editorialFields: {
+  include: ['title', 'excerpt', 'faq.question', 'cta.label', 'tags', 'featuredImage'],
+  exclude: ['content'],
+  relations: {
+    tags: { relationTo: 'tags', allowCreate: true },
+    featuredImage: { relationTo: 'media', allowCreate: false },
+  },
+},
+```
+
+Startup resolves and caches the registry from the host schema. Every included
+path must exist and itself declare `localized: true`; a localized parent alone
+does not qualify an individually included child. Groups, arrays, named tabs and
+block variants use dot paths (`faq.question`, `layout.hero.heading`). Block slugs
+are required; array indexes and wildcards are not configuration paths. Rows,
+collapsibles and unnamed tabs do not add path segments. Shared block references
+resolve against `config.blocks`.
+
+Adapters cover text, textarea, richText, number, date, checkbox, select,
+relationship, upload, group, array, blocks and named tabs (as groups). Including
+a whole localized container covers its validated child schema in that locale.
+Include a container or its child paths, never both. Unsupported types, hidden,
+read-only and virtual fields are rejected. A container containing a forbidden
+field is rejected; configure safe child paths instead.
+
+`content` is always forbidden at every nesting level, even if explicitly
+included. Technical names, including IDs, publication status, slug/routing,
+system authorship, timestamps, access, credentials, versions, file metadata and
+payment fields are also forbidden. Hosts must keep business-sensitive fields out
+of the allowlist. `exclude` removes exact paths and their descendants; a child
+exclusion within an included whole container is rejected to prevent a parent
+object patch from bypassing it. Unknown exclusions are rejected, except the
+mandatory `content` exclusion, which is allowed even without a host field.
+
+Every included relationship/upload, including children of a whole container,
+requires an exact-path `relations` policy with explicit `allowCreate: true` or
+`false`. `relationTo` must match the Payload target or full polymorphic target
+list, and every target must exist. Creation additionally requires each target
+collection in plugin `collections` with its own nonempty `editorialFields`
+allowlist and the same validation rules. Collections without Payload drafts may
+be configured, but creation still requires editor review and selection. Registry
+configuration itself does not generate, create, link, update or publish records.
+
 ## Permissions and editorial workflow
 
 `generate`, `apply` and `manage` callbacks run on the server and may be asynchronous.

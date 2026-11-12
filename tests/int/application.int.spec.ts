@@ -17,6 +17,7 @@ const allowed = ({ req }: { req: PayloadRequest }) => Boolean(req.user)
 const options: ValidatedPluginOptions = {
   collections: { posts: { titleField: 'title', localizedSourceFields: ['title', 'content'], mediaCollection: 'media', extractContent: ({ doc }) => String(doc.content), resolveURL: ({ locale }) => `https://site.test/${locale}/post` } },
   locales: ['fr', 'en'], bulk: false,
+  editorialRegistries: {},
   nim: { baseURL: 'https://nim.test/v1', apiKey: 'test-only-key', model: 'fixture' },
   site: { defaultLocale: 'fr', organization: { name: 'Site', url: 'https://site.test' } },
   permissions: { generate: allowed, apply: allowed, manage: allowed },

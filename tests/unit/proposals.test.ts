@@ -9,6 +9,7 @@ import type { SeoProposalPayload, ValidatedPluginOptions } from '../../src/types
 const options: ValidatedPluginOptions = {
   collections: { posts: { titleField: 'title', localizedSourceFields: ['title', 'content'], mediaCollection: 'media', extractContent: ({ doc, locale }) => (doc.content as Record<string, string>)[locale], resolveURL: ({ locale }) => `https://site.test/${locale}/post` } },
   locales: ['fr', 'en'], bulk: false,
+  editorialRegistries: {},
   nim: { baseURL: 'https://nim.test/v1', apiKey: 'private-fixture-key', model: 'fixture' },
   site: { defaultLocale: 'fr', organization: { name: 'Site', url: 'https://site.test' } },
   permissions: { generate: () => true, apply: () => false, manage: () => false },

@@ -7,7 +7,9 @@ import type { ValidatedPluginOptions } from '../../src/types.js'
 const config = { baseURL: 'https://nim.test/v1/', apiKey: 'private-fixture-key', model: 'configured-model' }
 const options: ValidatedPluginOptions = {
   collections: { posts: { titleField: 'title', localizedSourceFields: ['title', 'content'], mediaCollection: 'media', extractContent: ({ doc }) => String(doc.content), resolveURL: () => 'https://site.test/en/post' } },
-  locales: ['fr', 'en'], bulk: false, nim: config,
+  locales: ['fr', 'en'], bulk: false,
+  editorialRegistries: {},
+  nim: config,
   site: { defaultLocale: 'fr', organization: { name: 'Site', url: 'https://site.test' } },
   permissions: { generate: () => true, apply: () => true, manage: () => false },
 }
