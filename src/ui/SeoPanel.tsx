@@ -5,6 +5,7 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import type { SeoAudit } from '../services/audit.js'
 import type { SeoProposalPayload } from '../types.js'
 import { errorCopy, panelStyle, preStyle, requestJSON, useSeoContext, WorkflowError } from './shared.js'
+import { EditorialProposalTree, editorialSelectionIssues, emptyEditorialSelection, type EditorialSelection } from './EditorialProposalTree.js'
 
 type Group = Exclude<keyof SeoProposalPayload, 'editorial'>
 type Proposal = {
@@ -31,6 +32,7 @@ export function SeoPanel({ locales, mediaCollection }: SeoPanelProps) {
   const [state, setState] = useState<PanelState>()
   const [selection, setSelection] = useState<{ scope: string; id: string }>()
   const [groupSelection, setGroupSelection] = useState<{ proposalKey: string; values: Group[] }>()
+  const [editorialSelection, setEditorialSelection] = useState<{ proposalKey: string; values: EditorialSelection }>()
   const [selectedMedia, setSelectedMedia] = useState<(string | number)[]>([])
   const [pending, setPending] = useState<string>()
   const [notice, setNotice] = useState<{ scope: string; text: string; error?: boolean }>()
@@ -39,6 +41,10 @@ export function SeoPanel({ locales, mediaCollection }: SeoPanelProps) {
   const proposal = proposals.find((item) => String(item.id) === (selection?.scope === scope ? selection.id : undefined)) ?? proposals[0]
   const proposalKey = JSON.stringify([scope, proposal?.id])
   const groups = groupSelection?.proposalKey === proposalKey ? groupSelection.values : []
+  const editorial = proposal?.output?.editorial?.locale === locale ? proposal.output.editorial : undefined
+  const editorialValues = editorialSelection?.proposalKey === proposalKey && editorial ? editorialSelection.values : emptyEditorialSelection()
+  const editorialReady = !editorial || editorialSelectionIssues(editorial, editorialValues).length === 0
+  const hasSelection = groups.length > 0 || editorialValues.editorialPaths.length > 0 || editorialValues.applyGraph
   const busy = pending === scope
   const canRead = permissions && (permissions.generate || permissions.apply || permissions.manage)
   const saved = id !== undefined && Boolean(collectionSlug) && !modified
@@ -66,7 +72,7 @@ export function SeoPanel({ locales, mediaCollection }: SeoPanelProps) {
 
   useEffect(() => {
     const controller = new AbortController()
-    setGroupSelection(undefined); setSelectedMedia([]); setPending(undefined); setNotice(undefined)
+    setGroupSelection(undefined); setEditorialSelection(undefined); setSelectedMedia([]); setPending(undefined); setNotice(undefined)
     void load(controller.signal).catch((error: unknown) => {
       if (!controller.signal.aborted && currentScope.current === scope) setNotice({ scope, text: errorCopy(error, copy), error: true })
     })
@@ -74,7 +80,7 @@ export function SeoPanel({ locales, mediaCollection }: SeoPanelProps) {
   }, [load, scope])
 
   // Automatic fallback after apply/reject needs a fresh editorial selection too.
-  useEffect(() => { setGroupSelection(undefined) }, [proposalKey])
+  useEffect(() => { setGroupSelection(undefined); setEditorialSelection(undefined) }, [proposalKey])
 
   async function perform(action: 'generate' | 'apply' | 'reject' | 'refresh') {
     if (busy) return
@@ -88,7 +94,7 @@ export function SeoPanel({ locales, mediaCollection }: SeoPanelProps) {
         setSelection({ scope, id: String(result.proposal.id) }); setGroupSelection(undefined)
         await load()
         if (currentScope.current === scope) setNotice({ scope, text: result.proposal.state === 'failed' ? copy.failed : copy.generated, error: result.proposal.state === 'failed' })
-      } else if (action === 'apply' && proposal && matches(proposal) && groups.length && saved && !form.disabled && !hostBusy) {
+      } else if (action === 'apply' && proposal && matches(proposal) && hasSelection && editorialReady && saved && !form.disabled && !hostBusy) {
         // The response replaces saved form values: prevent edits and host saves until
         // both the API mutation and the asynchronous form reset have completed.
         form.setDisabled(true)
@@ -97,7 +103,7 @@ export function SeoPanel({ locales, mediaCollection }: SeoPanelProps) {
           form.setProcessing(false)
           form.setDisabled(false)
         }
-        const result = await requestJSON<{ doc: Record<string, unknown> }>(`${api}/nim-seo/apply`, { proposalID: proposal.id, locale, groups })
+        const result = await requestJSON<{ doc: Record<string, unknown> }>(`${api}/nim-seo/apply`, { proposalID: proposal.id, locale, groups, ...editorialValues })
         if (currentScope.current !== scope) return
         // Replace the form's saved values so a subsequent Save cannot restore old SEO.
         await form.reset(result.doc)
@@ -154,7 +160,7 @@ export function SeoPanel({ locales, mediaCollection }: SeoPanelProps) {
       <h3>{copy.changes}</h3>
       <fieldset disabled={busy || !permissions.apply || proposal.state !== 'draft'}><legend>{copy.selectGroups}</legend>
         {(Object.keys(labels) as Group[]).map((group) => <div key={group}>
-          <label><input type="checkbox" checked={groups.includes(group)} onChange={(event) => setGroupSelection((previous) => {
+          <label><input type="checkbox" disabled={group === 'schema' && editorialValues.applyGraph} checked={groups.includes(group)} onChange={(event) => setGroupSelection((previous) => {
             const values = previous?.proposalKey === proposalKey ? previous.values : []
             return { proposalKey, values: event.target.checked ? [...values, group] : values.filter((value) => value !== group) }
           })} /> {labels[group]}</label>
@@ -163,6 +169,9 @@ export function SeoPanel({ locales, mediaCollection }: SeoPanelProps) {
           </table>
         </div>)}
       </fieldset>
+      {editorial && <EditorialProposalTree key={proposalKey} proposal={editorial} locale={locale} current={data} selection={editorialValues}
+        disabled={busy || !permissions.apply || proposal.state !== 'draft'} graphDisabled={groups.includes('schema')}
+        onChange={(values) => setEditorialSelection({ proposalKey, values })} />}
       <h3>{copy.ogPreview}</h3><strong>{output.social.ogTitle ?? output.meta.title}</strong><p>{output.social.ogDescription ?? output.meta.description}</p>
       <h3>{copy.imagePreview}</h3><dl>
         <dt>{copy.image}</dt><dd>{output.social.image ?? '—'}</dd>
@@ -173,7 +182,7 @@ export function SeoPanel({ locales, mediaCollection }: SeoPanelProps) {
       </dl>
       <h3>{copy.schema}</h3><pre style={preStyle}>{JSON.stringify(output.schema, null, 2)}</pre>
       {permissions.apply && <>
-        <button type="button" disabled={busy || hostBusy || form.disabled || !saved || groups.length === 0 || proposal.state !== 'draft'} onClick={() => void perform('apply')}>{copy.apply}</button>
+        <button type="button" disabled={busy || hostBusy || form.disabled || !saved || !hasSelection || !editorialReady || proposal.state !== 'draft'} onClick={() => void perform('apply')}>{editorial ? copy.applySelection : copy.apply}</button>
         <button type="button" disabled={busy || proposal.state !== 'draft'} onClick={() => void perform('reject')}>{copy.reject}</button>
       </>}
     </>}

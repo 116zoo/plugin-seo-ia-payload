@@ -173,7 +173,7 @@ keeps the existing SEO-only behavior. Configure exact Payload schema paths:
 
 ```ts
 editorialFields: {
-  include: ['title', 'excerpt', 'faq.question', 'cta.label', 'tags', 'featuredImage'],
+  include: ['title', 'excerpt', 'faq', 'cta.label', 'tags', 'featuredImage'],
   exclude: ['content'],
   relations: {
     tags: { relationTo: 'tags', allowCreate: true },
@@ -215,6 +215,64 @@ allowlist and the same validation rules. Collections without Payload drafts may
 be configured, but creation still requires editor review and selection. Registry
 configuration itself does not generate, create, link, update or publish records.
 
+For application, include a whole localized array/block container (`faq`,
+`layout`) rather than a descendant leaf such as `faq.question`. Patches have no
+row index or stable row identity; descendant patches below arrays/blocks are
+rejected during application. Nested group/tab leaves such as `cta.label` remain
+supported. Whole-container values replace that selected container.
+
+## Reviewing editorial proposals and graphs
+
+When a proposal contains an `editorial` envelope, the admin shows a hierarchical
+diff beside the four SEO groups. Check individual fields and every required
+related draft explicitly. `content` stays with the editor and is never generated,
+selected or applied. The French and English panels operate independently, using
+only the active saved locale; changing document, locale or proposal clears the
+selection. The preview never copies a proposal from another language.
+
+The semantic graph has its own **Apply semantic graph** checkbox. It is mutually
+exclusive with the legacy JSON-LD group. The preview shows selected properties,
+nodes and relations only; `draft:<localId>` identities remain provisional until
+the server creates the selected records and resolves their public URLs. The
+approved value is one JSON-LD object with `@context: 'https://schema.org'` and an
+`@graph` array, stored as the sole entry of `seo.schema`. Without that checkbox,
+editorial application leaves the approved schema unchanged.
+
+The structured editorial response is:
+
+```ts
+editorial: {
+  locale: 'fr',
+  patches: [{ path: 'excerpt', operation: 'set', value: 'Résumé proposé' }],
+  relatedDrafts: [],
+  semanticGraph: {
+    '@context': 'https://schema.org',
+    '@graph': [{ '@id': 'https://example.com/fr/article', '@type': 'Article', description: 'Résumé proposé' }],
+  },
+  graphBindings: [{ path: 'excerpt', nodeId: 'https://example.com/fr/article', properties: ['description'] }],
+}
+```
+
+`semanticGraph` and `graphBindings` are an optional pair. Bindings assign every
+non-draft graph property to one validated patch, allowing safe partial selection.
+Related drafts have `{ collection, localId, locale, fields, graphNodeId }`; `fields`
+maps exact configured target paths to proposed values and `graphNodeId` is
+`draft:<localId>`. A relation value references it as `{ localId }` (or inside
+Payload's `{ relationTo, value }` form for polymorphic relations). All local
+dependencies must be explicitly selected and reachable from selected patches.
+The server validates types, locale, source identity and graph safety again when
+applying. Represented relations need a host `resolveURL` on their target
+collection; model-supplied URLs never establish a document's public identity.
+
+Editorial application requires a fresh proposal with an editable-field
+fingerprint; older proposals remain usable for SEO groups only and should be
+regenerated for field application. Creation, field updates, graph and application
+audit share one transaction. SQLite and PostgreSQL currently support the verified
+atomic proposal claim; other adapters reject editorial application until their
+conditional-update guarantee is supported. SEO-only application retains its
+existing adapter compatibility. Related collections with drafts receive drafts;
+collections without drafts receive ordinary records after explicit validation.
+
 ## Permissions and editorial workflow
 
 `generate`, `apply` and `manage` callbacks run on the server and may be asynchronous.
@@ -227,9 +285,11 @@ Protect host role fields and configure least-privilege access for content/media.
 2. Generate a proposal. The current SEO stays unchanged; failed output stores safe
    diagnostics in `seo-proposals`.
 3. Review the four groups: meta, social, schema and citability, with the current
-   approved values beside the proposal. Apply only explicitly selected groups.
+   approved values beside the proposal. If editorial fields are present, also
+   review each field, required related record and optional semantic graph.
+   Apply only the explicit selection.
 4. Application replaces each selected group, including clearing omitted optional
-   values. Unselected SEO groups and source content remain unchanged. This is not
+   values. Unselected fields/groups and `content` remain unchanged. This is not
    a fill-empty operation. Applying consumes the proposal once.
 5. Publish through the host's normal editorial workflow. With Payload drafts
    enabled, application updates the latest draft and never publishes it. Enable
