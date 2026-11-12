@@ -156,8 +156,15 @@ export const parseEditorialProposal = (
         // Only inert Lexical text structure; custom/link/upload nodes require an explicit future adapter.
         if (!record(item) || !record(item.root)) return invalid()
         keys(item, ['root'])
-        const visit = (node: unknown, root = false): void => {
-          if (!record(node) || typeof node.type !== 'string' || !['root', 'paragraph', 'text', 'linebreak', 'heading', 'quote', 'list', 'listitem'].includes(node.type) || (root && node.type !== 'root')) invalid()
+        const childTypes: Record<string, readonly string[]> = {
+          root: ['paragraph', 'heading', 'quote', 'list'],
+          paragraph: ['text', 'linebreak'], heading: ['text', 'linebreak'], quote: ['text', 'linebreak'],
+          list: ['listitem'], listitem: ['text', 'linebreak', 'list'],
+          text: [], linebreak: [],
+        }
+        const visit = (node: unknown, parent?: string): void => {
+          if (!record(node) || typeof node.type !== 'string' || !Object.hasOwn(childTypes, node.type)
+            || (parent === undefined ? node.type !== 'root' : !childTypes[parent].includes(node.type))) invalid()
           const current = node as Record<string, unknown>
           keys(current, ['type', 'version', 'children', 'direction', 'format', 'indent', 'text', 'detail', 'mode', 'style', 'tag', 'listType', 'start', 'value', 'checked', 'textFormat', 'textStyle'])
           if (current.tag !== undefined && !['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ol', 'ul'].includes(current.tag as string)) invalid()
@@ -173,12 +180,15 @@ export const parseEditorialProposal = (
           if (current.style || current.textStyle || (current.text !== undefined && !text(current.text))) invalid()
           if (current.version !== 1) invalid()
           if (current.type === 'text' && typeof current.text !== 'string') invalid()
-          if (current.children !== undefined) {
+          if (current.type !== 'text' && Object.hasOwn(current, 'text')) invalid()
+          if (['text', 'linebreak'].includes(current.type as string)) {
+            if (Object.hasOwn(current, 'children')) invalid()
+          } else {
             if (!Array.isArray(current.children)) return invalid()
-            current.children.forEach((child) => visit(child))
-          } else if (!['text', 'linebreak'].includes(current.type as string)) invalid()
+            current.children.forEach((child) => visit(child, current.type as string))
+          }
         }
-        visit(item.root, true)
+        visit(item.root)
         break
       }
       default: invalid()

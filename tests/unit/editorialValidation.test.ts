@@ -123,6 +123,28 @@ describe('Payload container and rich-text adapters', () => {
     }
   })
 
+  test('enforces Lexical root, block, list and leaf parent-child structure', () => {
+    const rich = singleField(descriptor('intro', { name: 'intro', type: 'richText' }))
+    const text = { type: 'text', text: 'Safe text', version: 1 }
+    const linebreak = { type: 'linebreak', version: 1 }
+    const paragraph = { type: 'paragraph', version: 1, children: [text, linebreak] }
+    const listitem = { type: 'listitem', version: 1, children: [text] }
+    const list = { type: 'list', version: 1, tag: 'ul', listType: 'bullet', start: 1, children: [listitem] }
+    const root = (children: unknown[]) => ({ root: { type: 'root', version: 1, children } })
+    const allowed = root([paragraph, { type: 'heading', version: 1, tag: 'h2', children: [text] }, { type: 'quote', version: 1, children: [text] }, { ...list, children: [{ ...listitem, children: [text, list] }] }])
+    expect(parseEditorialProposal(onePatch('intro', allowed), rich, 'fr').patches).toHaveLength(1)
+    for (const value of [
+      root([text]), root([linebreak]), root([listitem]),
+      root([{ type: 'root', version: 1, children: [paragraph] }]),
+      root([{ ...paragraph, children: [{ type: 'root', version: 1, children: [] }] }]),
+      root([{ ...paragraph, children: [paragraph] }]),
+      root([{ ...list, children: [text] }]),
+      root([{ ...paragraph, children: [{ ...text, children: [] }] }]),
+      root([{ ...paragraph, children: [{ ...linebreak, children: [] }] }]),
+      root([{ ...paragraph, children: [{ ...linebreak, text: 'Wrong leaf' }] }]),
+    ]) expect(() => parseEditorialProposal(onePatch('intro', value), rich, 'fr')).toThrow()
+  })
+
   test('rejects cycles, excessive trees, non-JSON values and prototype pollution safely', () => {
     const cycle: Record<string, unknown> = {}
     cycle.value = cycle
