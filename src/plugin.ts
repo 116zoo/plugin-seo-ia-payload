@@ -1,5 +1,9 @@
 import type { Config, Plugin } from 'payload'
 
+import { buildProposalsCollection } from './collections/proposals.js'
+import { buildRunsCollection } from './collections/runs.js'
+import { buildSeoFields } from './fields/seoFields.js'
+
 import type { NimSeoPluginOptions, ValidatedPluginOptions } from './types.js'
 
 const configurationError = (message: string): Error =>
@@ -79,8 +83,25 @@ export const validatePluginOptions = (
   return { ...options, bulk }
 }
 
-/** Validate compatibility when Payload applies the plugin to the host config. */
+/** Add SEO models without mutating the host's collection/config objects. */
 export const nimSeoPlugin = (options: NimSeoPluginOptions): Plugin => (config) => {
-  validatePluginOptions(options, config)
-  return config
+  const validated = validatePluginOptions(options, config)
+  const collections = (config.collections ?? []).map((collection) => {
+    const target = validated.collections[collection.slug]
+    if (!target || collection.fields.some((field) => 'name' in field && field.name === 'seo')) {
+      return collection
+    }
+    return {
+      ...collection,
+      fields: [...collection.fields, ...buildSeoFields({
+        ...validated,
+        collections: { [collection.slug]: target },
+      })],
+    }
+  })
+  for (const build of [buildProposalsCollection, buildRunsCollection]) {
+    const internal = build(validated)
+    if (!collections.some(({ slug }) => slug === internal.slug)) collections.push(internal)
+  }
+  return { ...config, collections }
 }

@@ -15,7 +15,9 @@ const Media: CollectionConfig = {
   fields: [{ name: 'alt', type: 'text', localized: true }],
 }
 
-const isEditor = ({ req }: { req: PayloadRequest }): boolean => Boolean(req.user)
+const isEditor = ({ req }: { req: PayloadRequest }): boolean =>
+  req.user?.role === 'editor' || req.user?.role === 'admin'
+const isManager = ({ req }: { req: PayloadRequest }): boolean => req.user?.role === 'admin'
 
 export default buildConfig({
   secret: process.env.PAYLOAD_SECRET ?? 'local-fixture-only-do-not-use-in-production',
@@ -28,7 +30,16 @@ export default buildConfig({
     fallback: false,
   },
   collections: [
-    { slug: 'users', auth: true, fields: [] },
+    {
+      slug: 'users', auth: true,
+      fields: [{
+        name: 'role', type: 'select', options: ['viewer', 'editor', 'admin'], defaultValue: 'viewer',
+        access: {
+          create: isManager,
+          update: isManager,
+        },
+      }],
+    },
     Media,
     Posts,
   ],
@@ -56,7 +67,7 @@ export default buildConfig({
         defaultLocale: 'fr',
         organization: { name: 'Local SEO fixture', url: 'https://example.test' },
       },
-      permissions: { generate: isEditor, apply: isEditor, manage: isEditor },
+      permissions: { generate: isEditor, apply: isEditor, manage: isManager },
     }),
   ],
   typescript: { outputFile: path.join(fixtureDir, 'payload-types.ts') },

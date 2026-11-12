@@ -176,10 +176,50 @@ describe('nimSeoPlugin', () => {
     expect(() => nimSeoPlugin(makeOptions())(config)).toThrow(/en.*localization/i)
   })
 
-  test('preserves compatible host configuration', () => {
+  test('preserves compatible host configuration while adding SEO models', async () => {
     const config = makeConfig()
-    const original = structuredClone(config)
-    expect(nimSeoPlugin(makeOptions())(config)).toEqual(original)
-    expect(config).toEqual(original)
+    config.endpoints = [{ path: '/host', method: 'get', handler: () => new Response('host') }]
+    config.admin = { meta: { titleSuffix: 'Host CMS' } }
+    const originalCollections = [...config.collections!]
+    const originalFields = [...originalCollections[0].fields]
+    const result = await nimSeoPlugin(makeOptions())(config)
+    expect(result.endpoints).toBe(config.endpoints)
+    expect(result.jobs).toBe(config.jobs)
+    expect(result.admin).toBe(config.admin)
+    expect(result.collections?.find(({ slug }) => slug === 'media')).toBe(originalCollections[1])
+    expect(result.collections?.find(({ slug }) => slug === 'posts')?.fields).toEqual(
+      expect.arrayContaining([...originalFields, expect.objectContaining({ name: 'seo' })]),
+    )
+    expect(config.collections).toEqual(originalCollections)
+    expect(config.collections?.[0].fields).toEqual(originalFields)
+  })
+
+  test('uses each target collection media adapter and retains existing SEO fields', async () => {
+    const config = makeConfig()
+    const options = makeOptions()
+    options.collections.pages = { ...options.collections.posts, mediaCollection: 'page-media' }
+    config.collections!.push({ slug: 'pages', fields: [] }, { slug: 'page-media', fields: [] })
+    const result = await nimSeoPlugin(options)(config)
+    expect(result.collections?.find(({ slug }) => slug === 'pages')?.fields).toContainEqual(
+      expect.objectContaining({ name: 'seo', fields: expect.arrayContaining([
+        expect.objectContaining({ name: 'social', fields: expect.arrayContaining([
+          expect.objectContaining({ name: 'image', relationTo: 'page-media' }),
+        ]) }),
+      ]) }),
+    )
+    const existingSEO = { name: 'seo', type: 'group' as const, fields: [{ name: 'host', type: 'text' as const }] }
+    config.collections![0].fields.push(existingSEO)
+    const withExisting = await nimSeoPlugin(options)(config)
+    expect(withExisting.collections?.[0].fields.filter((field) => 'name' in field && field.name === 'seo')).toEqual([existingSEO])
+  })
+
+  test('preserves existing workflow collections without duplicate slugs', async () => {
+    const config = makeConfig()
+    const existingProposals = { slug: 'seo-proposals', fields: [{ name: 'hostField', type: 'text' as const }] }
+    const existingRuns = { slug: 'seo-runs', fields: [] }
+    config.collections!.push(existingProposals, existingRuns)
+    const result = await nimSeoPlugin(makeOptions())(config)
+    expect(result.collections?.filter(({ slug }) => slug === 'seo-proposals')).toEqual([existingProposals])
+    expect(result.collections?.filter(({ slug }) => slug === 'seo-runs')).toEqual([existingRuns])
   })
 })
