@@ -91,6 +91,24 @@ describe('parseProposalOutput', () => {
     expect(() => parseProposalOutput({ ...validOutput(), schema: [graph] }, input)).toThrow(/schema/)
   })
 
+  test.each([
+    { '@context': 'https://schema.org', '@type': 'Article', type: 'Product', id: 'javascript:alert(1)' },
+    { '@type': 'Article', type: 'Article' },
+    { '@type': 'Article', id: 'https://site.test/fr/x' },
+    { '@type': 'Article', author: { '@type': 'Person', type: 'Product' } },
+    { '@type': 'Article', author: { '@type': 'Person', id: 'javascript:alert(1)' } },
+    { '@context': 'https://schema.org', '@graph': [{ '@type': 'Article', author: { '@type': 'Person', type: 'Person', id: 'https://site.test/author' } }] },
+  ])('rejects Schema.org keyword aliases consistently at root and nested depths (%j)', (graph) => {
+    expect(() => parseProposalOutput({ ...validOutput(), schema: [graph] }, input)).toThrow(/schema/)
+  })
+
+  test.each([
+    { '@context': 'https://schema.org', '@type': 'Organization', type: 'Article' },
+    { '@type': 'Organization', subjectOf: { '@type': 'Organization', type: 'Article' } },
+  ])('rejects aliased page types before no-public-URL filtering (%j)', (graph) => {
+    expect(() => parseProposalOutput({ ...validOutput(), schema: [graph] }, { ...input, url: undefined })).toThrow(/schema/)
+  })
+
   test('accepts each allowed root schema type and safe graph containers', () => {
     for (const type of ['WebPage', 'Article', 'BlogPosting', 'BreadcrumbList', 'Organization', 'WebSite', 'FAQPage']) {
       expect(parseProposalOutput({ ...validOutput(), schema: [{ '@context': 'https://schema.org', '@type': type }] }, input).schema).toHaveLength(1)

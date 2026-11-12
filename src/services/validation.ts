@@ -25,7 +25,9 @@ const nestedTypes = new Set([...rootTypes, 'Person', 'ImageObject', 'ListItem', 
 const pageTypes = new Set(['WebPage', 'Article', 'BlogPosting', 'BreadcrumbList', 'WebSite', 'FAQPage'])
 const urlFields = new Set(['@id', 'url', 'sameAs', 'image', 'logo', 'contentUrl', 'embedUrl', 'thumbnailUrl', 'mainEntityOfPage', 'isPartOf', 'license', 'discussionUrl', 'item', 'subjectOf', 'sdLicense'])
 const stringURLFields = new Set(['@id', 'url', 'sameAs', 'contentUrl', 'embedUrl', 'thumbnailUrl', 'license', 'discussionUrl', 'sdLicense'])
-const forbiddenKeys = new Set(['__proto__', 'prototype', 'constructor'])
+// The Schema.org context aliases these JSON-LD keywords; require canonical spellings
+// so every accepted type and identifier follows the same validation/filtering rules.
+const forbiddenKeys = new Set(['__proto__', 'prototype', 'constructor', 'type', 'id'])
 const jsonLdKeywords = new Set(['@context', '@type', '@id', '@graph', '@value', '@language', '@list', '@set'])
 const diagnosticFields = new Set([
   'meta', 'title', 'description', 'canonical', 'robots', 'focusKeyphrase',
