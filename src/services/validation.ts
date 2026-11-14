@@ -224,5 +224,10 @@ export const parseProposalOutput = (value: unknown, input: Pick<GenerationInput,
   // @graph members inherit this root context; never add contexts recursively.
   const uniqueGraphs = new Set(graphs.map((graph) => JSON.stringify(sortedJSON({ ...graph, '@context': 'https://schema.org' }))))
   output.schema = [...uniqueGraphs].map((graph) => JSON.parse(graph) as Record<string, unknown>)
+  if (input.url && editorialOutput?.semanticGraph) {
+    const editorialGraph = sortedJSON({ ...editorialOutput.semanticGraph, '@context': 'https://schema.org' }) as Record<string, unknown>
+    const serializedEditorialGraph = JSON.stringify(editorialGraph)
+    if (!uniqueGraphs.has(serializedEditorialGraph)) output.schema.push(editorialGraph)
+  }
   return { ...output, ...(editorialOutput ? { editorial: editorialOutput } : {}) }
 }
